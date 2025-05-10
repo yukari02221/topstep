@@ -1,0 +1,1 @@
+cmd /c "C:\Work\Python\venv\.venv\Scripts\activate.bat"
