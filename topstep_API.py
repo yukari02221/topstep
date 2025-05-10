@@ -533,6 +533,163 @@ class TopstepXClient:
             print("バーデータを取得できませんでした")
         
         return selected_contract, bars
+
+    def search_orders(self,
+                      account_id: int,
+                      start_timestamp: Union[str, datetime],
+                      end_timestamp: Optional[Union[str, datetime]] = None,
+                      verbose: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        指定されたアカウントIDと期間で注文を検索する
+
+        Args:
+            account_id (int): 検索対象のアカウントID
+            start_timestamp (Union[str, datetime]): 検索期間の開始日時 (ISO8601形式文字列またはdatetimeオブジェクト)
+            end_timestamp (Optional[Union[str, datetime]], optional): 検索期間の終了日時 (ISO8601形式文字列またはdatetimeオブジェクト)。
+                                                                  デフォルトはNone。
+            verbose (bool, optional): 詳細なログメッセージを表示するかどうか。デフォルトはTrue。
+
+        Returns:
+            Optional[Dict[str, Any]]: 注文情報を含むAPIレスポンス。失敗した場合はNone。
+        """
+        if not self.check_auth():
+            if verbose:
+                print("認証されていません。先に認証を行ってください。")
+            return None
+
+        # datetimeオブジェクトをISO8601形式の文字列に変換
+        if isinstance(start_timestamp, datetime):
+            start_timestamp_str = start_timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+        else:
+            start_timestamp_str = start_timestamp
+
+        end_timestamp_str: Optional[str] = None
+        if isinstance(end_timestamp, datetime):
+            end_timestamp_str = end_timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+        elif isinstance(end_timestamp, str):
+            end_timestamp_str = end_timestamp
+
+        search_url = f"{self.api_url}/api/Order/search"
+        
+        payload: Dict[str, Any] = {
+            "accountId": account_id,
+            "startTimestamp": start_timestamp_str
+        }
+        if end_timestamp_str:
+            payload["endTimestamp"] = end_timestamp_str                
+        try:
+            if verbose:
+                print(f"注文検索リクエスト送信先: {search_url}")
+                print(f"ペイロード: {json.dumps(payload)}")
+
+            response = requests.post(
+                search_url,
+                headers=self.headers,
+                data=json.dumps(payload),
+                timeout=30 # 必要に応じて調整
+            )
+
+            if response.ok:
+                data = response.json()
+                if data.get("success") and data.get("errorCode") == 0:
+                    if verbose:
+                        print(f"注文検索に成功しました。取得件数: {len(data.get('orders', []))}")
+                    return data
+                else:
+                    if verbose:
+                        print(f"注文検索APIエラー: {data.get('errorMessage')}")
+                        print(f"エラーコード: {data.get('errorCode')}")
+            else:
+                if verbose:
+                    print(f"注文検索リクエストエラー: {response.status_code} {response.reason}")
+                    if response.text:
+                        print(f"エラー詳細: {response.text}")
+            
+            return None
+
+        except Exception as e:
+            if verbose:
+                print(f"注文検索中にエラーが発生しました: {str(e)}")
+            return None
+
+    def get_orders(self,
+                   account_id: int,
+                   start_timestamp: Union[str, datetime],
+                   end_timestamp: Optional[Union[str, datetime]] = None,
+                   verbose: bool = True) -> List[Dict[str, Any]]:
+        """
+        指定されたアカウントIDと期間で注文リストを取得する（便利メソッド）
+
+        Args:
+            account_id (int): 検索対象のアカウントID
+            start_timestamp (Union[str, datetime]): 検索期間の開始日時
+            end_timestamp (Optional[Union[str, datetime]], optional): 検索期間の終了日時。デフォルトはNone。
+            verbose (bool, optional): 詳細なログメッセージを表示するかどうか。デフォルトはTrue。
+
+        Returns:
+            List[Dict[str, Any]]: 注文情報のリスト。失敗した場合は空リスト。
+        """
+        result = self.search_orders(
+            account_id=account_id,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            verbose=verbose
+        )
+        if result and "orders" in result:
+            return result["orders"]
+        return []
+
+    def select_account(self, only_active: bool = True, verbose_selection: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        アカウントを検索し、ユーザーに対話的に選択させる。
+
+        Args:
+            only_active (bool, optional): アクティブなアカウントのみを検索対象とするか。デフォルトはTrue。
+            verbose_selection (bool, optional): アカウント選択プロセス中のメッセージを表示するか。デフォルトはTrue。
+
+        Returns:
+            Optional[Dict[str, Any]]: 選択されたアカウント情報。キャンセルされた場合や見つからない場合はNone。
+        """
+        # アカウントリストを取得 (このメソッド内でのAPIエラー詳細は表示しないことが多いので verbose=False)
+        accounts = self.get_accounts(only_active=only_active, verbose=False)
+
+        if not accounts:
+            if verbose_selection:
+                print("利用可能なアカウントが見つかりませんでした。")
+            return None
+
+        if verbose_selection:
+            print(f"\n==== 利用可能なアカウント: {len(accounts)}件 ====")
+            for i, account in enumerate(accounts, 1):
+                print(f"{i}. ID: {account.get('id')}, "
+                      f"名前: {account.get('name')}, "
+                      f"残高: {account.get('balance', 'N/A')}, " # balance がない場合も考慮
+                      f"取引可能: {'はい' if account.get('canTrade') else 'いいえ'}")
+
+        while True:
+            try:
+                choice_str = input(f"使用するアカウントの番号を選択してください (1-{len(accounts)}), または 'q' で中止: ")
+                if choice_str.lower() == 'q':
+                    if verbose_selection:
+                        print("アカウント選択を中止しました。")
+                    return None
+                
+                choice_idx = int(choice_str) - 1
+                if 0 <= choice_idx < len(accounts):
+                    selected_account = accounts[choice_idx]
+                    if verbose_selection:
+                        print(f"\n選択されたアカウント: ID={selected_account.get('id')}, 名前={selected_account.get('name')}")
+                    return selected_account
+                else:
+                    if verbose_selection:
+                        print(f"無効な選択です。1から{len(accounts)}までの数字を入力してください。")
+            except ValueError:
+                if verbose_selection:
+                    print("数字を入力するか、'q'で中止してください。")
+            except Exception as e:
+                if verbose_selection:
+                    print(f"アカウント選択中にエラーが発生しました: {str(e)}")
+                return None #予期せぬエラーの場合はNoneを返す
     
     def get_accounts(self, only_active: bool = True, verbose: bool = True) -> List[Dict[str, Any]]:
         """
@@ -769,9 +926,10 @@ def main():
         print("2. 契約検索")
         print("3. 契約検索から履歴データ取得")
         print("4. 契約IDを直接指定して履歴データ取得")
+        print("5. アカウント検索後、指定したIDの注文履歴を取得")
         print("0. 終了")
         
-        choice = input("選択（0-4）: ")
+        choice = input("選択（0-5）: ")
         
         if choice == "0":
             print("プログラムを終了します。")
@@ -1017,6 +1175,85 @@ def main():
             else:
                 print(f"契約ID '{contract_id}' の履歴データを取得できませんでした。")
                 print("契約IDが正しいか確認してください。")
+
+        elif choice == "5": # 注文検索
+            print("\n---- 注文検索を開始します ----")
+            try:
+                # --- アカウントID選択部分の変更 ---
+                print("まず、注文を検索するアカウントを選択してください。")
+                # only_active=True は適宜変更してください
+                selected_account_info = client.select_account(only_active=True, verbose_selection=True)
+
+                if not selected_account_info:
+                    continue 
+
+                account_id = selected_account_info.get("id")
+                if account_id is None: # 万が一IDが取得できなかった場合
+                    print("エラー: 選択されたアカウントからIDを取得できませんでした。注文検索を中止します。")
+                    continue
+                
+                print(f"アカウントID {account_id} の注文を検索します。")
+                # --- アカウントID選択部分の変更ここまで ---
+                
+                # デフォルトの時間範囲を設定（過去7日間）
+                end_dt = datetime.now()
+                start_dt = end_dt - timedelta(days=7)
+                
+                custom_range = input(f"カスタム期間を指定しますか？(y/n、デフォルト: n、期間: {start_dt.date()} から {end_dt.date()}): ").lower()
+                if custom_range == 'y':
+                    start_date_str = input(f"開始日（YYYY-MM-DD、デフォルト: {start_dt.strftime('%Y-%m-%d')}）: ") or start_dt.strftime("%Y-%m-%d")
+                    end_date_str = input(f"終了日（YYYY-MM-DD、デフォルト: {end_dt.strftime('%Y-%m-%d')}）: ") or end_dt.strftime("%Y-%m-%d")
+                    try:
+                        start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
+                        # 終了日はその日の終わりまでにする
+                        end_dt = datetime.strptime(end_date_str, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999)
+                    except ValueError:
+                        print("無効な日付形式です。デフォルト期間を使用します。")
+                        # デフォルトに戻す
+                        end_dt = datetime.now()
+                        start_dt = end_dt - timedelta(days=7)
+
+                # 注文取得 (client.get_orders は client.search_orders を呼び、その中で verbose が制御される)
+                orders = client.get_orders(
+                    account_id=account_id,
+                    start_timestamp=start_dt,
+                    end_timestamp=end_dt,
+                    verbose=True # API呼び出し時の詳細ログは表示する
+                )
+                
+                if orders:
+                    print(f"\n===== 注文検索結果 ({len(orders)}件) =====")
+                    # ここで client.display_orders(orders) のような表示関数を呼び出すか、
+                    # 簡単なループで表示する
+                    for i, order_item in enumerate(orders[:10]): # 最初の10件を表示
+                        print(f"  注文 {i+1}: ID={order_item.get('id')}, Contract={order_item.get('contractId')}, "
+                              f"Status={order_item.get('status')}, Type={order_item.get('type')}, "
+                              f"Side={order_item.get('side')}, Size={order_item.get('size')}, "
+                              f"Created={order_item.get('creationTimestamp')}")
+                    if len(orders) > 10:
+                        print(f"  ... 他 {len(orders)-10} 件の注文があります。")
+                        
+                    save_choice = input("\n結果をJSONファイルに保存しますか？ (y/n、デフォルト: n): ").lower()
+                    if save_choice == 'y':
+                        filename = input("ファイル名を入力 (デフォルト: orders_result.json): ") or "orders_result.json"
+                        # search_orders を使って完全なレスポンスを取得して保存する
+                        # この時、API呼び出しの詳細ログは不要なので verbose=False にする
+                        full_response = client.search_orders(account_id, start_dt, end_dt, verbose=False)
+                        if full_response:
+                             client.save_result_to_json(full_response, filename)
+                        else:
+                            # get_orders で成功していても、search_orders で再度APIを叩くので、
+                            # ネットワークエラー等で失敗する可能性も考慮
+                            print("ファイル保存用のデータ取得に失敗しました。")
+                else:
+                    # get_orders が空リストを返した場合 (API呼び出し自体は成功したがデータが0件、またはAPIエラー)
+                    # client.get_orders の verbose=True により、APIエラーの場合はメッセージが出力されているはず
+                    print("指定された条件で注文は見つかりませんでした、または取得中にエラーが発生しました。")
+                    
+            except Exception as e:
+                print(f"注文検索処理全体で予期せぬエラーが発生しました: {str(e)}")
+                import traceback
+                traceback.print_exc() # デバッグ情報としてスタックトレースを表示
         
         else:
             print("無効な選択です。0-4の数字を入力してください。")
