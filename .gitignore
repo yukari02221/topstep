@@ -1,4 +1,4 @@
 start.bat
 .env
 __pycache__
-.json
+*.json
