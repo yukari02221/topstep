@@ -32,7 +32,7 @@ pip install pandas matplotlib
 ### クライアントの初期化と認証
 
 ```python
-from topstepx_client import TopstepXClient
+from topstep_API import TopstepXClient
 
 # クライアントの初期化（環境変数から認証情報を取得）
 client = TopstepXClient()
@@ -174,11 +174,8 @@ python topstepx_client.py
 
 ## 使用例
 
-より詳細な使用例については、`topstepx_examples.py`を参照してください：
+より詳細な使用例については、`example`を参照してください：
 
-```bash
-python topstepx_examples.py
-```
 
 ## 時間単位の定義
 
