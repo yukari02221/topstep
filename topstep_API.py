@@ -690,6 +690,111 @@ class TopstepXClient:
                 if verbose_selection:
                     print(f"アカウント選択中にエラーが発生しました: {str(e)}")
                 return None #予期せぬエラーの場合はNoneを返す
+
+    def search_trades(self,
+                    account_id: int,
+                    start_timestamp: Union[str, datetime],
+                    end_timestamp: Optional[Union[str, datetime]] = None,
+                    verbose: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        指定されたアカウントIDと期間でトレード履歴を検索する
+
+        Args:
+            account_id (int): 検索対象のアカウントID
+            start_timestamp (Union[str, datetime]): 検索期間の開始日時 (ISO8601形式文字列またはdatetimeオブジェクト)
+            end_timestamp (Optional[Union[str, datetime]], optional): 検索期間の終了日時 (ISO8601形式文字列またはdatetimeオブジェクト)。
+                                                                デフォルトはNone。
+            verbose (bool, optional): 詳細なログメッセージを表示するかどうか。デフォルトはTrue。
+
+        Returns:
+            Optional[Dict[str, Any]]: トレード情報を含むAPIレスポンス。失敗した場合はNone。
+        """
+        if not self.check_auth():
+            if verbose:
+                print("認証されていません。先に認証を行ってください。")
+            return None
+
+        # datetimeオブジェクトをISO8601形式の文字列に変換
+        if isinstance(start_timestamp, datetime):
+            start_timestamp_str = start_timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+        else:
+            start_timestamp_str = start_timestamp
+
+        end_timestamp_str: Optional[str] = None
+        if isinstance(end_timestamp, datetime):
+            end_timestamp_str = end_timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+        elif isinstance(end_timestamp, str):
+            end_timestamp_str = end_timestamp
+
+        search_url = f"{self.api_url}/api/Trade/search"
+        
+        payload: Dict[str, Any] = {
+            "accountId": account_id,
+            "startTimestamp": start_timestamp_str
+        }
+        if end_timestamp_str:
+            payload["endTimestamp"] = end_timestamp_str                
+        try:
+            if verbose:
+                print(f"トレード検索リクエスト送信先: {search_url}")
+                print(f"ペイロード: {json.dumps(payload)}")
+
+            response = requests.post(
+                search_url,
+                headers=self.headers,
+                data=json.dumps(payload),
+                timeout=30
+            )
+
+            if response.ok:
+                data = response.json()
+                if data.get("success") and data.get("errorCode") == 0:
+                    if verbose:
+                        print(f"トレード検索に成功しました。取得件数: {len(data.get('trades', []))}")
+                    return data
+                else:
+                    if verbose:
+                        print(f"トレード検索APIエラー: {data.get('errorMessage')}")
+                        print(f"エラーコード: {data.get('errorCode')}")
+            else:
+                if verbose:
+                    print(f"トレード検索リクエストエラー: {response.status_code} {response.reason}")
+                    if response.text:
+                        print(f"エラー詳細: {response.text}")
+            
+            return None
+
+        except Exception as e:
+            if verbose:
+                print(f"トレード検索中にエラーが発生しました: {str(e)}")
+            return None
+
+    def get_trades(self,
+                account_id: int,
+                start_timestamp: Union[str, datetime],
+                end_timestamp: Optional[Union[str, datetime]] = None,
+                verbose: bool = True) -> List[Dict[str, Any]]:
+        """
+        指定されたアカウントIDと期間でトレード履歴リストを取得する（便利メソッド）
+
+        Args:
+            account_id (int): 検索対象のアカウントID
+            start_timestamp (Union[str, datetime]): 検索期間の開始日時
+            end_timestamp (Optional[Union[str, datetime]], optional): 検索期間の終了日時。デフォルトはNone。
+            verbose (bool, optional): 詳細なログメッセージを表示するかどうか。デフォルトはTrue。
+
+        Returns:
+            List[Dict[str, Any]]: トレード情報のリスト。失敗した場合は空リスト。
+        """
+        result = self.search_trades(
+            account_id=account_id,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            verbose=verbose
+        )
+        if result and "trades" in result:
+            return result["trades"]
+        return []
     
     def get_accounts(self, only_active: bool = True, verbose: bool = True) -> List[Dict[str, Any]]:
         """
@@ -862,6 +967,56 @@ class TopstepXClient:
         if len(bars) > limit:
             print(f"\n... 他 {len(bars) - limit} 件のバーデータがあります")
 
+    @staticmethod
+    def display_trades(trades: List[Dict[str, Any]], limit: int = 10) -> None:
+        """
+        トレード履歴を表示する
+        
+        Args:
+            trades (List[Dict[str, Any]]): トレード履歴のリスト
+            limit (int, optional): 表示する最大トレード数。デフォルトは10
+        """
+        if not trades:
+            print("トレード履歴が見つかりませんでした")
+            return
+        
+        print(f"取得したトレード数: {len(trades)}")
+        
+        # 表示するトレード数を制限
+        display_trades = trades[:min(limit, len(trades))]
+        
+        # テーブルヘッダーを表示
+        print("\nID    | 契約ID           | 日時                    | 価格      | 損益      | 手数料   | 売買 | サイズ | 注文ID")
+        print("-" * 100)
+        
+        # サイド（売買）の表示用マッピング
+        side_map = {0: "買", 1: "売"}
+        
+        # トレードデータを表示
+        for trade in display_trades:
+            trade_id = trade.get("id", "N/A")
+            contract_id = trade.get("contractId", "N/A")
+            time_str = trade.get("creationTimestamp", "")[:19].replace("T", " ")  # ISO8601形式から日時部分のみを抽出
+            price = trade.get("price", 0)
+            
+            # ここが問題の箇所 - profitAndLossがNoneの場合の処理
+            pnl = trade.get("profitAndLoss")
+            if pnl is None:
+                pnl_str = "N/A     "  # NoneならN/Aとして表示（空白でパディング）
+            else:
+                pnl_str = f"{pnl:<9.3f}"
+                
+            fees = trade.get("fees", 0)
+            side = side_map.get(trade.get("side", -1), "不明")
+            size = trade.get("size", 0)
+            order_id = trade.get("orderId", "N/A")
+            
+            print(f"{trade_id:<8} | {contract_id:<17} | {time_str} | {price:<9.3f} | {pnl_str} | {fees:<7.4f} | {side}  | {size:<6} | {order_id}")
+        
+        # 表示されていないトレードがある場合
+        if len(trades) > limit:
+            print(f"\n... 他 {len(trades) - limit} 件のトレードデータがあります")
+
     def to_pandas(self, bars: List[Dict[str, Any]]) -> Any:
         """
         履歴データをPandasのDataFrameに変換する
@@ -927,9 +1082,10 @@ def main():
         print("3. 契約検索から履歴データ取得")
         print("4. 契約IDを直接指定して履歴データ取得")
         print("5. アカウント検索後、指定したIDの注文履歴を取得")
+        print("6. アカウント検索後、指定したIDのトレード履歴を取得")
         print("0. 終了")
         
-        choice = input("選択（0-5）: ")
+        choice = input("選択（0-6）: ")
         
         if choice == "0":
             print("プログラムを終了します。")
@@ -1254,9 +1410,74 @@ def main():
                 print(f"注文検索処理全体で予期せぬエラーが発生しました: {str(e)}")
                 import traceback
                 traceback.print_exc() # デバッグ情報としてスタックトレースを表示
+
+        elif choice == "6": # トレード検索
+            print("\n---- トレード履歴検索を開始します ----")
+            try:
+                # アカウント選択
+                print("まず、トレード履歴を検索するアカウントを選択してください。")
+                selected_account_info = client.select_account(only_active=True, verbose_selection=True)
+
+                if not selected_account_info:
+                    continue 
+
+                account_id = selected_account_info.get("id")
+                if account_id is None:
+                    print("エラー: 選択されたアカウントからIDを取得できませんでした。トレード検索を中止します。")
+                    continue
+                
+                print(f"アカウントID {account_id} のトレード履歴を検索します。")
+                
+                # デフォルトの時間範囲を設定（過去7日間）
+                end_dt = datetime.now()
+                start_dt = end_dt - timedelta(days=7)
+                
+                custom_range = input(f"カスタム期間を指定しますか？(y/n、デフォルト: n、期間: {start_dt.date()} から {end_dt.date()}): ").lower()
+                if custom_range == 'y':
+                    start_date_str = input(f"開始日（YYYY-MM-DD、デフォルト: {start_dt.strftime('%Y-%m-%d')}）: ") or start_dt.strftime("%Y-%m-%d")
+                    end_date_str = input(f"終了日（YYYY-MM-DD、デフォルト: {end_dt.strftime('%Y-%m-%d')}）: ") or end_dt.strftime("%Y-%m-%d")
+                    try:
+                        start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
+                        # 終了日はその日の終わりまでにする
+                        end_dt = datetime.strptime(end_date_str, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999)
+                    except ValueError:
+                        print("無効な日付形式です。デフォルト期間を使用します。")
+                        # デフォルトに戻す
+                        end_dt = datetime.now()
+                        start_dt = end_dt - timedelta(days=7)
+
+                # トレード履歴取得
+                trades = client.get_trades(
+                    account_id=account_id,
+                    start_timestamp=start_dt,
+                    end_timestamp=end_dt,
+                    verbose=True
+                )
+                
+                if trades:
+                    print(f"\n===== トレード履歴検索結果 ({len(trades)}件) =====")
+                    # トレード履歴表示
+                    client.display_trades(trades)
+                        
+                    save_choice = input("\n結果をJSONファイルに保存しますか？ (y/n、デフォルト: n): ").lower()
+                    if save_choice == 'y':
+                        filename = input("ファイル名を入力 (デフォルト: trades_result.json): ") or "trades_result.json"
+                        # 完全なレスポンスを取得して保存
+                        full_response = client.search_trades(account_id, start_dt, end_dt, verbose=False)
+                        if full_response:
+                            client.save_result_to_json(full_response, filename)
+                        else:
+                            print("ファイル保存用のデータ取得に失敗しました。")
+                else:
+                    print("指定された条件でトレード履歴は見つかりませんでした、または取得中にエラーが発生しました。")
+                        
+            except Exception as e:
+                print(f"トレード履歴検索処理全体で予期せぬエラーが発生しました: {str(e)}")
+                import traceback
+                traceback.print_exc()
         
         else:
-            print("無効な選択です。0-5の数字を入力してください。")
+            print("無効な選択です。0-6の数字を入力してください。")
 
 
 # このファイルが直接実行された場合のみmain()を実行
