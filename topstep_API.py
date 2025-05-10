@@ -6,7 +6,7 @@ import json
 import os
 import sys
 import getpass
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List, Union, Tuple
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -138,6 +138,115 @@ class TopstepXClient:
             print(f"アカウント検索中にエラーが発生しました: {str(e)}")
             return None
 
+    def search_contracts(self, search_text: str = "", live: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        契約を検索する
+        
+        Args:
+            search_text (str): 検索するテキスト（契約名や一部）
+            live (bool): ライブデータを使用するかどうか
+            
+        Returns:
+            Optional[Dict[str, Any]]: 契約情報を含むレスポンス。失敗した場合はNone
+        """
+        # 認証が済んでいない場合は認証を行う
+        if not self.token and not self.authenticate():
+            print("認証されていません。先に認証を行ってください。")
+            return None
+        
+        search_url = f"{self.api_url}/api/Contract/search"
+        
+        payload = {
+            "searchText": search_text,
+            "live": live
+        }        
+        try:
+            print(f"契約検索リクエスト送信先: {search_url}")
+            response = requests.post(
+                search_url,
+                headers=self.headers,
+                data=json.dumps(payload),
+                timeout=10
+            )
+            
+            if response.ok:
+                data = response.json()
+                
+                if data.get("success") and data.get("errorCode") == 0:
+                    return data
+                else:
+                    print(f"契約検索エラー: {data.get('errorMessage')}")
+            else:
+                print(f"契約検索エラー: {response.status_code} {response.reason}")
+                if response.text:
+                    print(f"エラー詳細: {response.text}")
+            
+            return None
+        
+        except Exception as e:
+            print(f"契約検索中にエラーが発生しました: {str(e)}")
+            return None
+
+    def get_contracts(self, search_text: str = "", live: bool = False) -> List[Dict[str, Any]]:
+        """
+        契約情報のリストを取得する（便利メソッド）
+        
+        Args:
+            search_text (str): 検索するテキスト
+            live (bool): ライブデータを使用するかどうか
+            
+        Returns:
+            List[Dict[str, Any]]: 契約情報のリスト。失敗した場合は空リスト
+        """
+        result = self.search_contracts(search_text, live)
+        if result and "contracts" in result:
+            return result["contracts"]
+        return []
+
+    def select_contract(self, search_text: str = "", live: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        契約を検索し、ユーザーに選択させる
+        
+        Args:
+            search_text (str): 検索するテキスト
+            live (bool): ライブデータを使用するかどうか
+            
+        Returns:
+            Optional[Dict[str, Any]]: 選択された契約情報。キャンセルされた場合はNone
+        """
+        contracts = self.get_contracts(search_text, live)
+        
+        if not contracts:
+            print(f"検索テキスト '{search_text}' に一致する契約が見つかりませんでした")
+            return None
+        
+        print(f"\n==== 検索結果: {len(contracts)}件の契約が見つかりました ====")
+        
+        for i, contract in enumerate(contracts, 1):
+            print(f"{i}. {contract.get('name')} - {contract.get('description')}")
+            print(f"   ID: {contract.get('id')}")
+            print(f"   ティックサイズ: {contract.get('tickSize')}, ティック値: {contract.get('tickValue')}")
+            print(f"   アクティブ契約: {'はい' if contract.get('activeContract') else 'いいえ'}")
+            print()
+        
+        while True:
+            try:
+                choice = input("使用する契約の番号を選択してください (1-{0}), または 'q' で中止: ".format(len(contracts)))
+                
+                if choice.lower() == 'q':
+                    return None
+                
+                choice_idx = int(choice) - 1
+                if 0 <= choice_idx < len(contracts):
+                    selected_contract = contracts[choice_idx]
+                    print(f"\n選択された契約: {selected_contract.get('name')} - {selected_contract.get('description')}")
+                    return selected_contract
+                else:
+                    print("無効な選択です。1から{0}までの数字を入力してください".format(len(contracts)))
+            
+            except ValueError:
+                print("数字を入力してください")
+
     def retrieve_bars(self,
                       contract_id: str,
                       start_time: Union[str, datetime],
@@ -212,7 +321,6 @@ class TopstepXClient:
         except Exception as e:
             print(f"履歴データ取得中にエラーが発生しました: {str(e)}")
             return None
-
     def get_bars(self, 
                 contract_id: str, 
                 start_time: Union[str, datetime], 
@@ -252,6 +360,61 @@ class TopstepXClient:
         if result and "bars" in result:
             return result["bars"]
         return []
+    
+    def search_and_get_bars(self, 
+                           search_text: str,
+                           start_time: Union[str, datetime], 
+                           end_time: Union[str, datetime], 
+                           unit: int = 2,
+                           unit_number: int = 1, 
+                           limit: int = 1000, 
+                           live: bool = False, 
+                           include_partial_bar: bool = False) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        契約を検索し、選択された契約の履歴データを取得する
+        
+        Args:
+            search_text (str): 検索するテキスト
+            start_time (Union[str, datetime]): 開始時間
+            end_time (Union[str, datetime]): 終了時間
+            unit (int, optional): 時間単位（1=秒, 2=分, 3=時間, 4=日, 5=週, 6=月）
+            unit_number (int, optional): 単位数
+            limit (int, optional): 取得する最大バー数
+            live (bool, optional): ライブデータを使用するかどうか
+            include_partial_bar (bool, optional): 現在の時間単位の部分的なバーを含めるかどうか
+            
+        Returns:
+            Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]: (選択された契約, 履歴データのリスト)
+        """
+        # 契約を検索して選択
+        selected_contract = self.select_contract(search_text, live)
+        
+        if not selected_contract:
+            print("契約が選択されませんでした")
+            return None, []
+        
+        # 選択された契約IDで履歴データを取得
+        contract_id = selected_contract.get("id")
+        
+        print(f"\n{selected_contract.get('description')}の履歴データを取得します...")
+        
+        bars = self.get_bars(
+            contract_id=contract_id,
+            start_time=start_time,
+            end_time=end_time,
+            unit=unit,
+            unit_number=unit_number,
+            limit=limit,
+            live=live,
+            include_partial_bar=include_partial_bar
+        )
+        
+        if bars:
+            print(f"{len(bars)}件のバーデータを取得しました")
+        else:
+            print("バーデータを取得できませんでした")
+        
+        return selected_contract, bars
     
     def get_accounts(self, only_active: bool = True) -> List[Dict[str, Any]]:
         """
@@ -343,6 +506,25 @@ class TopstepXClient:
             print(f"ファイル保存中にエラーが発生しました: {str(e)}")
             return False
 
+def get_time_unit_name(unit: int) -> str:
+    """
+    時間単位の数値を名前に変換する
+    
+    Args:
+        unit (int): 時間単位（1=秒, 2=分, 3=時間, 4=日, 5=週, 6=月）
+        
+    Returns:
+        str: 時間単位の名前
+    """
+    unit_names = {
+        1: "秒",
+        2: "分",
+        3: "時間",
+        4: "日",
+        5: "週",
+        6: "月"
+    }
+    return unit_names.get(unit, "不明")
 
 def display_accounts(accounts: List[Dict[str, Any]]) -> None:
     """
@@ -418,8 +600,9 @@ def main():
     # 機能を選択
     print("\n実行する機能を選択してください:")
     print("1. アカウント検索")
-    print("2. 履歴データ（バー）の取得")
-    choice = input("選択（1または2）: ")
+    print("2. 契約検索")
+    print("3. 契約検索から履歴データ取得")
+    choice = input("選択（1-3）: ")
     
     if choice == "1":
         # アクティブアカウントのみか全アカウントかを選択
@@ -433,10 +616,49 @@ def main():
         # 結果の表示
         print("\n===== アカウント検索結果 =====")
         display_accounts(accounts)
-        
+    
     elif choice == "2":
-        # 履歴データの取得に必要なパラメータを入力
-        contract_id = input("契約ID（例: CON.F.US.RTY.Z24）: ")
+        # 契約検索
+        search_text = input("検索するテキストを入力（例: ES, NQ, RTY）: ")
+        
+        live_choice = input("ライブデータを使用しますか？(y/n、デフォルト: n): ").lower()
+        live = live_choice == 'y'
+        
+        # 契約検索を実行
+        print("\n---- 契約検索を開始します ----")
+        contracts = client.get_contracts(search_text, live)
+        
+        # 結果の表示
+        print("\n===== 契約検索結果 =====")
+        
+        if contracts:
+            print(f"{len(contracts)}件の契約が見つかりました:")
+            
+            for i, contract in enumerate(contracts, 1):
+                print(f"\n契約 {i}:")
+                print(f"  ID: {contract.get('id')}")
+                print(f"  名前: {contract.get('name')}")
+                print(f"  説明: {contract.get('description')}")
+                print(f"  ティックサイズ: {contract.get('tickSize')}")
+                print(f"  ティック値: {contract.get('tickValue')}")
+                print(f"  アクティブ契約: {'はい' if contract.get('activeContract') else 'いいえ'}")
+            
+            # 結果を保存するかどうか
+            save_result_choice = input("\n検索結果をJSONファイルに保存しますか？(y/n、デフォルト: n): ").lower()
+            if save_result_choice == 'y':
+                result_filename = input("ファイル名を入力 (デフォルト: contracts.json): ") or "contracts.json"
+                result_data = {"contracts": contracts, "success": True, "errorCode": 0, "errorMessage": None}
+                client.save_result_to_json(result_data, result_filename)
+        else:
+            print("契約が見つかりませんでした")
+    
+    elif choice == "3":
+        # 契約検索から履歴データ取得
+        search_text = input("検索するテキストを入力（例: ES, NQ, RTY）: ")
+        
+        # ライブデータを使用するかどうか
+        live_choice = input("ライブデータを使用しますか？(y/n、デフォルト: n): ").lower()
+        live = live_choice == 'y'
         
         # デフォルトの時間範囲を設定（過去30日間）
         end_time = datetime.now()
@@ -479,18 +701,14 @@ def main():
         limit_str = input("取得する最大バー数（デフォルト: 1000）: ") or "1000"
         limit = int(limit_str) if limit_str.isdigit() and int(limit_str) > 0 else 1000
         
-        # ライブデータを使用するかどうか
-        live_choice = input("ライブデータを使用しますか？(y/n、デフォルト: n): ").lower()
-        live = live_choice == 'y'
-        
         # 部分的なバーを含めるかどうか
         partial_choice = input("現在の時間単位の部分的なバーを含めますか？(y/n、デフォルト: n): ").lower()
         include_partial_bar = partial_choice == 'y'
         
-        # 履歴データの取得
-        print("\n---- 履歴データの取得を開始します ----")
-        bars = client.get_bars(
-            contract_id=contract_id,
+        # 契約検索から履歴データ取得
+        print("\n---- 契約検索と履歴データ取得を開始します ----")
+        selected_contract, bars = client.search_and_get_bars(
+            search_text=search_text,
             start_time=start_time,
             end_time=end_time,
             unit=unit,
@@ -500,20 +718,37 @@ def main():
             include_partial_bar=include_partial_bar
         )
         
-        # 結果の表示
-        print("\n===== 履歴データ取得結果 =====")
-        display_bars(bars)
-        
-        # 結果をJSONファイルに保存するかどうか
-        if bars:
+        if selected_contract and bars:
+            # 結果の表示
+            print(f"\n===== {selected_contract.get('description')}の履歴データ =====")
+            print(f"時間単位: {unit_number}{get_time_unit_name(unit)}")
+            print(f"期間: {start_time.date()} から {end_time.date()}")
+            
+            display_bars(bars)
+            
+            # 結果をJSONファイルに保存するかどうか
             save_result_choice = input("\n取得した履歴データをJSONファイルに保存しますか？(y/n、デフォルト: n): ").lower()
             if save_result_choice == 'y':
-                result_filename = input("ファイル名を入力 (デフォルト: bars.json): ") or "bars.json"
-                result_data = {"bars": bars, "success": True, "errorCode": 0, "errorMessage": None}
+                symbol = selected_contract.get('name', '').lower()
+                result_filename = input(f"ファイル名を入力 (デフォルト: {symbol}_bars.json): ") or f"{symbol}_bars.json"
+                
+                result_data = {
+                    "contract": selected_contract,
+                    "bars": bars,
+                    "unit": unit,
+                    "unitNumber": unit_number,
+                    "startTime": start_time.isoformat() if isinstance(start_time, datetime) else start_time,
+                    "endTime": end_time.isoformat() if isinstance(end_time, datetime) else end_time,
+                    "success": True,
+                    "errorCode": 0,
+                    "errorMessage": None
+                }
+                
                 client.save_result_to_json(result_data, result_filename)
     
     else:
         print("無効な選択です。処理を終了します。")
+
 
 if __name__ == "__main__":
     main()
