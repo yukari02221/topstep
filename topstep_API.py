@@ -602,7 +602,8 @@ def main():
     print("1. アカウント検索")
     print("2. 契約検索")
     print("3. 契約検索から履歴データ取得")
-    choice = input("選択（1-3）: ")
+    print("4. 契約IDを直接指定して履歴データ取得")
+    choice = input("選択（1-4）: ")
     
     if choice == "1":
         # アクティブアカウントのみか全アカウントかを選択
@@ -745,6 +746,105 @@ def main():
                 }
                 
                 client.save_result_to_json(result_data, result_filename)
+    
+    elif choice == "4":
+        # 契約IDを直接指定して履歴データ取得
+        contract_id = input("契約IDを入力（例: CON.F.US.RTY.Z24）: ")
+        
+        # ライブデータを使用するかどうか
+        live_choice = input("ライブデータを使用しますか？(y/n、デフォルト: n): ").lower()
+        live = live_choice == 'y'
+        
+        # デフォルトの時間範囲を設定（過去30日間）
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=30)
+        
+        # 時間範囲のカスタマイズ
+        custom_range = input(f"カスタム期間を指定しますか？(y/n、デフォルト: n、デフォルト期間: {start_time.date()} から {end_time.date()}): ").lower()
+        
+        if custom_range == 'y':
+            start_date_str = input("開始日（YYYY-MM-DD）: ")
+            try:
+                start_time = datetime.strptime(start_date_str, "%Y-%m-%d")
+            except ValueError:
+                print(f"無効な日付形式です。デフォルトの開始日（{start_time.date()}）を使用します。")
+            
+            end_date_str = input("終了日（YYYY-MM-DD）: ")
+            try:
+                end_time = datetime.strptime(end_date_str, "%Y-%m-%d")
+                # 終了日の23:59:59に設定
+                end_time = end_time.replace(hour=23, minute=59, second=59)
+            except ValueError:
+                print(f"無効な日付形式です。デフォルトの終了日（{end_time.date()}）を使用します。")
+        
+        # 時間単位の選択
+        print("\n時間単位を選択してください:")
+        print("1. 秒")
+        print("2. 分")
+        print("3. 時間")
+        print("4. 日")
+        print("5. 週")
+        print("6. 月")
+        unit_choice = input("選択（1-6、デフォルト: 2）: ") or "2"
+        unit = int(unit_choice) if unit_choice.isdigit() and 1 <= int(unit_choice) <= 6 else 2
+        
+        # 単位数の入力
+        unit_number_str = input("単位数（デフォルト: 1）: ") or "1"
+        unit_number = int(unit_number_str) if unit_number_str.isdigit() and int(unit_number_str) > 0 else 1
+        
+        # 取得するバー数の上限
+        limit_str = input("取得する最大バー数（デフォルト: 1000）: ") or "1000"
+        limit = int(limit_str) if limit_str.isdigit() and int(limit_str) > 0 else 1000
+        
+        # 部分的なバーを含めるかどうか
+        partial_choice = input("現在の時間単位の部分的なバーを含めますか？(y/n、デフォルト: n): ").lower()
+        include_partial_bar = partial_choice == 'y'
+        
+        # 履歴データの取得
+        print("\n---- 履歴データの取得を開始します ----")
+        print(f"契約ID: {contract_id}")
+        print(f"期間: {start_time.date()} から {end_time.date()}")
+        print(f"時間単位: {unit_number}{get_time_unit_name(unit)}")
+        
+        bars = client.get_bars(
+            contract_id=contract_id,
+            start_time=start_time,
+            end_time=end_time,
+            unit=unit,
+            unit_number=unit_number,
+            limit=limit,
+            live=live,
+            include_partial_bar=include_partial_bar
+        )
+        
+        if bars:
+            # 結果の表示
+            print(f"\n===== 契約ID: {contract_id}の履歴データ =====")
+            display_bars(bars)
+            
+            # 結果をJSONファイルに保存するかどうか
+            save_result_choice = input("\n取得した履歴データをJSONファイルに保存しますか？(y/n、デフォルト: n): ").lower()
+            if save_result_choice == 'y':
+                # 契約IDから簡易的なファイル名を生成
+                file_prefix = contract_id.split('.')[-2].lower() if len(contract_id.split('.')) > 2 else "contract"
+                result_filename = input(f"ファイル名を入力 (デフォルト: {file_prefix}_bars.json): ") or f"{file_prefix}_bars.json"
+                
+                result_data = {
+                    "contractId": contract_id,
+                    "bars": bars,
+                    "unit": unit,
+                    "unitNumber": unit_number,
+                    "startTime": start_time.isoformat() if isinstance(start_time, datetime) else start_time,
+                    "endTime": end_time.isoformat() if isinstance(end_time, datetime) else end_time,
+                    "success": True,
+                    "errorCode": 0,
+                    "errorMessage": None
+                }
+                
+                client.save_result_to_json(result_data, result_filename)
+        else:
+            print(f"契約ID '{contract_id}' の履歴データを取得できませんでした。")
+            print("契約IDが正しいか確認してください。")
     
     else:
         print("無効な選択です。処理を終了します。")
