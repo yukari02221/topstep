@@ -13,7 +13,7 @@ const CONFIG = {
   USERNAME: 'YOUR_USERNAME',  // ⚠️ 実際のユーザー名に変更してください
   API_KEY: 'YOUR_API_KEY',    // ⚠️ 実際のAPIキーに変更してください
   // 設定値
-  HISTORY_SHEET_NAME: '取引履歴',
+  HISTORY_SHEET_NAME: '取引履歴', // ユーザー指定のシート名に合わせてください
   CONFIG_SHEET_NAME: '設定',
   LOG_SHEET_NAME: '実行ログ',
   EMAIL_NOTIFICATION: true,
@@ -293,37 +293,66 @@ function saveTradeHistoryToSheet(targetDate, result) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     let sheet = ss.getSheetByName(CONFIG.HISTORY_SHEET_NAME);
     
+    const newHeader = ['ID', 'アカウントID', '契約ID', '取引日時', '価格', '損益', '手数料', '売買区分', 'サイズ', '無効', '注文ID']; // 11列
+    const numColumns = newHeader.length;
+
     if (!sheet) {
       // シートが存在しない場合は作成
       sheet = ss.insertSheet(CONFIG.HISTORY_SHEET_NAME);
       // ヘッダー行
-      sheet.appendRow(['日付', '取得日時', 'アカウントID', 'アカウント名', '残高', '取引ID', '契約ID', '取引時刻', '価格', '損益', '手数料', '売買区分', 'サイズ', '無効フラグ', '注文ID']);
+      sheet.appendRow(newHeader);
       
       // ヘッダー行の書式設定
-      sheet.getRange('A1:O1').setFontWeight('bold');
-      sheet.getRange('A1:O1').setBackground('#f3f3f3');
+      sheet.getRange(1, 1, 1, numColumns).setFontWeight('bold');
+      sheet.getRange(1, 1, 1, numColumns).setBackground('#f3f3f3');
+    } else {
+        // 既存シートのヘッダーが新しいものと一致するか確認、異なれば上書き
+        const currentHeader = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+        if (JSON.stringify(currentHeader.slice(0, numColumns)) !== JSON.stringify(newHeader)) {
+            sheet.clearContents(); // ヘッダーが異なる場合は全クリアして再作成
+            sheet.appendRow(newHeader);
+            sheet.getRange(1, 1, 1, numColumns).setFontWeight('bold');
+            sheet.getRange(1, 1, 1, numColumns).setBackground('#f3f3f3');
+            Logger.log('ヘッダーが不一致のため、クリアして再作成しました。');
+        }
     }
     
     // 既存データの確認（対象日の取引が既に存在するか）
-    const existingDataRange = sheet.getRange('A:A');
-    const existingDataValues = existingDataRange.getValues();
-    let hasExistingData = false;
+    // 新しい形式では「取引日時」列（D列、インデックス3）で日付を比較
+    const tradeDateColumnIndex = 4; // D列 (1-indexed)
+    const existingDataValues = sheet.getLastRow() > 1 ? sheet.getRange(2, tradeDateColumnIndex, sheet.getLastRow() - 1, 1).getValues() : [];
+    const allSheetData = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() -1, sheet.getLastColumn()).getValues() : [];
     const rowsToDelete = [];
     
-    for (let i = 1; i < existingDataValues.length; i++) {  // 1行目はヘッダーなのでスキップ
-      if (existingDataValues[i][0] && typeof existingDataValues[i][0].toISOString === 'function') { // Dateオブジェクトの場合
-        if (Utilities.formatDate(new Date(existingDataValues[i][0]), CONFIG.TIMEZONE, 'yyyy-MM-dd') === targetDate) {
-          hasExistingData = true;
-          rowsToDelete.push(i + 1);
+    for (let i = 0; i < existingDataValues.length; i++) {
+      const cellValue = existingDataValues[i][0];
+      if (cellValue) {
+        let tradeDateStr = '';
+        if (cellValue instanceof Date) {
+          tradeDateStr = Utilities.formatDate(cellValue, CONFIG.TIMEZONE, 'yyyy-MM-dd');
+        } else if (typeof cellValue === 'string' && cellValue.length >= 10) {
+            // 文字列の場合、ISO形式などを想定して日付部分を抽出
+            try {
+                tradeDateStr = Utilities.formatDate(new Date(cellValue.substring(0,19).replace('T', ' ')), CONFIG.TIMEZONE, 'yyyy-MM-dd');
+            } catch(e) {
+                // 日付として解釈できない場合はスキップ
+                Logger.log(`行 ${i+2} の日付値を解釈できませんでした: ${cellValue}`);
+                continue;
+            }
+        } else {
+            // それ以外の型や短い文字列はスキップ
+            Logger.log(`行 ${i+2} の日付値の型が不正です: ${cellValue}`);
+            continue;
         }
-      } else if (String(existingDataValues[i][0]) === targetDate) { // 文字列として比較
-        hasExistingData = true;
-        rowsToDelete.push(i + 1);
+
+        if (tradeDateStr === targetDate) {
+          rowsToDelete.push(i + 2); // +2 はヘッダー行と0-indexed配列のため
+        }
       }
     }
     
     // 既存データを削除（重複を避けるため）
-    if (hasExistingData) {
+    if (rowsToDelete.length > 0) {
       Logger.log(`${targetDate}の既存データを削除します（${rowsToDelete.length}行）...`);
       // 行の削除は後ろから行う
       for (let i = rowsToDelete.length - 1; i >= 0; i--) {
@@ -332,7 +361,6 @@ function saveTradeHistoryToSheet(targetDate, result) {
     }
     
     // データ行
-    const currentTime = new Date().toISOString();
     let rowCount = 0;
     let totalProfit = 0;
     
@@ -341,21 +369,17 @@ function saveTradeHistoryToSheet(targetDate, result) {
     result.results.forEach(accountResult => {
       accountResult.trades.forEach(trade => {
         newRows.push([
-          targetDate,
-          currentTime,
-          accountResult.accountId,
-          accountResult.accountName,
-          accountResult.balance,
-          trade.id,
-          trade.contractId,
-          trade.creationTimestamp,
-          trade.price,
-          trade.profitAndLoss,
-          trade.fees,
-          trade.side === 0 ? '買い' : '売り',
-          trade.size,
-          trade.voided ? 'はい' : 'いいえ',
-          trade.orderId
+          trade.id,                   // ID
+          accountResult.accountId,    // アカウントID
+          trade.contractId,           // 契約ID
+          trade.creationTimestamp,    // 取引日時
+          trade.price,                // 価格
+          trade.profitAndLoss,        // 損益
+          trade.fees,                 // 手数料
+          trade.side === 0 ? '買い' : '売り', // 売買区分
+          trade.size,                 // サイズ
+          trade.voided ? 'はい' : 'いいえ', // 無効
+          trade.orderId               // 注文ID
         ]);
         
         rowCount++;
@@ -370,7 +394,7 @@ function saveTradeHistoryToSheet(targetDate, result) {
       Logger.log(`${rowCount}件の新しいトレードデータを追加します...`);
       // 最終行を取得して新しい行を追加
       const lastRow = sheet.getLastRow();
-      sheet.getRange(lastRow + 1, 1, newRows.length, 15).setValues(newRows);
+      sheet.getRange(lastRow + 1, 1, newRows.length, numColumns).setValues(newRows);
     } else {
       Logger.log(`${targetDate}のトレードデータはありませんでした。`);
     }
@@ -403,58 +427,62 @@ function saveTradeHistoryToSheet(targetDate, result) {
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - 対象シート
  */
 function formatHistorySheet(sheet) {
-  // シートの最大行と列を取得
   const lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return;  // データがない場合は処理不要
-  
+  if (lastRow <= 1) return; // データがない場合は処理不要
+
+  const numColumns = 11; // 新しい列数
+
+  // 列インデックス (1-based)
+  const tradeTimestampCol = 4; // D列: 取引日時
+  const priceCol = 5;          // E列: 価格
+  const pnlCol = 6;            // F列: 損益
+  const feesCol = 7;           // G列: 手数料
+
   // 日付列のフォーマット
-  sheet.getRange(2, 1, lastRow - 1, 1).setNumberFormat('yyyy-MM-dd');
-  sheet.getRange(2, 2, lastRow - 1, 1).setNumberFormat('yyyy-MM-dd HH:mm:ss');
-  sheet.getRange(2, 8, lastRow - 1, 1).setNumberFormat('yyyy-MM-dd HH:mm:ss');
+  sheet.getRange(2, tradeTimestampCol, lastRow - 1, 1).setNumberFormat('yyyy-MM-dd HH:mm:ss');
   
   // 数値列のフォーマット
-  sheet.getRange(2, 5, lastRow - 1, 1).setNumberFormat('#,##0.00');  // 残高
-  sheet.getRange(2, 9, lastRow - 1, 1).setNumberFormat('#,##0.00');  // 価格
-  sheet.getRange(2, 10, lastRow - 1, 1).setNumberFormat('#,##0.00');  // 損益
-  sheet.getRange(2, 11, lastRow - 1, 1).setNumberFormat('#,##0.00');  // 手数料
+  sheet.getRange(2, priceCol, lastRow - 1, 1).setNumberFormat('#,##0.00');  // 価格
+  sheet.getRange(2, pnlCol, lastRow - 1, 1).setNumberFormat('#,##0.00');   // 損益
+  sheet.getRange(2, feesCol, lastRow - 1, 1).setNumberFormat('#,##0.00');  // 手数料
   
-  // 条件付き書式の設定（損益列）
+  // 条件付き書式の設定（損益列 F列）
   removeExistingConditionalFormatRules(sheet); // 既存のルールをクリア
   
-  const plRange = sheet.getRange(2, 10, lastRow - 1, 1);
+  const plRange = sheet.getRange(2, pnlCol, lastRow - 1, 1);
   
-  // 正の値（利益）は緑背景
   const positiveRule = SpreadsheetApp.newConditionalFormatRule()
     .whenNumberGreaterThan(0)
     .setBackground('#d9ead3') // 薄い緑
     .setRanges([plRange])
     .build();
   
-  // 負の値（損失）は赤背景
   const negativeRule = SpreadsheetApp.newConditionalFormatRule()
     .whenNumberLessThan(0)
     .setBackground('#f4cccc') // 薄い赤
     .setRanges([plRange])
     .build();
   
-  // 条件付き書式を適用
   const rules = sheet.getConditionalFormatRules();
   rules.push(positiveRule);
   rules.push(negativeRule);
   sheet.setConditionalFormatRules(rules);
   
   // 列幅の調整
-  sheet.autoResizeColumns(1, 15);
+  if (sheet.getLastColumn() > 0) {
+      sheet.autoResizeColumns(1, Math.min(numColumns, sheet.getLastColumn()));
+  }
   
   // フィルターの設定（ヘッダー行）
-  if (lastRow > 0 && !sheet.getFilter()) { // データが1行以上あり、フィルターがない場合
-     sheet.getRange(1, 1, 1, sheet.getLastColumn()).createFilter();
-  } else if (lastRow > 0 && sheet.getFilter()) {
-    // 既にフィルターがある場合は再適用 (列数が変わった場合などに対応)
-    sheet.getFilter().remove();
-    sheet.getRange(1, 1, 1, sheet.getLastColumn()).createFilter();
+  const headerRange = sheet.getRange(1, 1, 1, Math.min(numColumns, sheet.getLastColumn()));
+  if (lastRow > 0 && sheet.getLastColumn() > 0) {
+    if (sheet.getFilter()) {
+      sheet.getFilter().remove();
+    }
+    headerRange.createFilter();
   }
 }
+
 
 /**
  * 既存の条件付き書式ルールを削除する関数
@@ -472,7 +500,6 @@ function updateConfigLastRun() {
   const configSheet = ss.getSheetByName(CONFIG.CONFIG_SHEET_NAME);
   
   if (configSheet) {
-    // 「最終実行日時」の行を探す
     const dataRange = configSheet.getDataRange();
     const values = dataRange.getValues();
     
@@ -494,7 +521,6 @@ function updateTriggerStatus(status) {
   const configSheet = ss.getSheetByName(CONFIG.CONFIG_SHEET_NAME);
   
   if (configSheet) {
-    // 「自動実行ステータス」の行を探す
     const dataRange = configSheet.getDataRange();
     const values = dataRange.getValues();
     
@@ -522,14 +548,12 @@ function logExecution(logData) {
   let logSheet = ss.getSheetByName(CONFIG.LOG_SHEET_NAME);
   
   if (!logSheet) {
-    // ログシートがなければ作成
     logSheet = ss.insertSheet(CONFIG.LOG_SHEET_NAME);
     logSheet.appendRow(['実行日時', '実行関数', '対象日', 'ステータス', 'メッセージ', '詳細']);
     logSheet.getRange('A1:F1').setFontWeight('bold');
     logSheet.getRange('A1:F1').setBackground('#f3f3f3');
   }
   
-  // ログデータの追加
   logSheet.appendRow([
     logData.date instanceof Date ? Utilities.formatDate(logData.date, CONFIG.TIMEZONE, 'yyyy-MM-dd HH:mm:ss') : logData.date,
     logData.function,
@@ -539,16 +563,14 @@ function logExecution(logData) {
     logData.details || ''
   ]);
   
-  // 古いログを削除（100行以上の場合）
   const maxLogRows = 100;
   const currentRows = logSheet.getLastRow();
   
-  if (currentRows > maxLogRows + 1) { // +1 はヘッダー行
+  if (currentRows > maxLogRows + 1) {
     logSheet.deleteRows(2, currentRows - maxLogRows - 1);
   }
   
-  // シートの書式設定
-  if (logSheet.getLastColumn() > 0) { // 列が存在する場合のみリサイズ
+  if (logSheet.getLastColumn() > 0) {
       logSheet.autoResizeColumns(1, logSheet.getLastColumn());
   }
 }
@@ -591,7 +613,7 @@ function sendNotificationEmail(result, targetDate) {
     });
   } catch (error) {
     Logger.log(`メール送信中にエラーが発生しました: ${error.message}`);
-    logExecution({ // メール送信エラーもログに記録
+    logExecution({
         date: new Date(),
         function: 'sendNotificationEmail',
         targetDate: targetDate,
@@ -630,7 +652,7 @@ function sendErrorEmail(errorMessage) {
     });
   } catch (error) {
     Logger.log(`エラーメール送信中にエラーが発生しました: ${error.message}`);
-     logExecution({ // エラーメール送信エラーもログに記録
+     logExecution({
         date: new Date(),
         function: 'sendErrorEmail',
         targetDate: '-',
@@ -651,33 +673,49 @@ function sendErrorEmail(errorMessage) {
  */
 function getTradeHistory(targetDate) {
   try {
-    // 認証トークンを取得
     const token = authenticate(CONFIG.USERNAME, CONFIG.API_KEY);
     if (!token) {
-      // authenticate関数内で既にErrorをthrowしているので、ここではキャッチされるはず
-      // もしauthenticateがnullを返し、Errorをthrowしない場合は、このチェックが有効
       throw new Error('認証に失敗しました。トークンが取得できませんでした。');
     }
     
     // アカウント情報の取得
-    const accounts = searchAccounts(token);
-    if (!accounts || accounts.length === 0) {
+    const allAccounts = searchAccounts(token); // まずAPIから全てのアクティブアカウントを取得
+    if (!allAccounts || allAccounts.length === 0) {
       return { success: false, message: 'アクティブなアカウントが見つかりませんでした' };
     }
+    Logger.log(`APIから取得したアカウント数: ${allAccounts.length}件`);
+    allAccounts.forEach(acc => Logger.log(` - ${acc.name} (ID: ${acc.id})`));
+
+    // アカウント名が "PRACTICE" で始まるものを除外するフィルタリング処理
+    const filteredAccounts = allAccounts.filter(account => {
+      if (account && typeof account.name === 'string') {
+        return !account.name.toUpperCase().startsWith('PRACTICE'); // 大文字・小文字を区別せずに "PRACTICE"で始まるかチェック
+      }
+      return false; // account.name がない、または文字列でない場合は除外 (安全のため)
+    });
+
+    Logger.log(`"PRACTICE"アカウントを除外した後のアカウント数: ${filteredAccounts.length}件`);
+    if (filteredAccounts.length > 0) {
+        filteredAccounts.forEach(acc => Logger.log(` -- 対象アカウント: ${acc.name} (ID: ${acc.id})`));
+    }
+
+
+    if (filteredAccounts.length === 0) {
+      return { success: false, message: 'PRACTICEアカウントを除外した結果、対象となる取引アカウントが見つかりませんでした。' };
+    }
     
-    // 指定日の開始・終了タイムスタンプを生成
     const { startTimestamp, endTimestamp } = getDateTimestamps(targetDate);
     
-    // 結果を格納する配列
     const results = [];
     
-    // 各アカウントの取引履歴を取得
-    accounts.forEach(account => {
+    // フィルタリングされたアカウントリストに対して処理を実行
+    filteredAccounts.forEach(account => {
+      Logger.log(`アカウント ${account.name} (ID: ${account.id}) の取引履歴を取得します。`);
       const trades = searchTrades(token, account.id, startTimestamp, endTimestamp);
       results.push({
         accountId: account.id,
-        accountName: account.name,
-        balance: account.balance,
+        // accountName: account.name, // スプレッドシートには出力しないが、ログや内部処理で利用可能
+        // balance: account.balance,  // スプレッドシートには出力しない
         tradeCount: trades.length,
         trades: trades
       });
@@ -690,10 +728,10 @@ function getTradeHistory(targetDate) {
     };
   } catch (error) {
     Logger.log('取引履歴取得処理(getTradeHistory)でエラーが発生しました: ' + error.message);
-    Logger.log(error.stack); // スタックトレースも記録
+    Logger.log(error.stack);
     return {
       success: false,
-      message: '取引履歴取得処理エラー: ' + error.message, // エラーメッセージに詳細を追加
+      message: '取引履歴取得処理エラー: ' + error.message,
       details: error.stack
     };
   }
@@ -716,7 +754,7 @@ function authenticate(userName, apiKey) {
     method: 'post',
     contentType: 'application/json',
     payload: JSON.stringify(payload),
-    muteHttpExceptions: true // HTTPエラー時もレスポンスを取得するためtrue
+    muteHttpExceptions: true
   };
   
   try {
@@ -739,11 +777,10 @@ function authenticate(userName, apiKey) {
   } catch (error) {
     Logger.log(`認証中に予期せぬエラー: ${error.message}`);
     Logger.log(error.stack);
-    // JSON.parseで失敗した場合などもここに来る
-    if (error instanceof SyntaxError) { // JSONパースエラーの場合
+    if (error instanceof SyntaxError) {
         throw new Error(`認証レスポンスの解析に失敗しました。レスポンス内容を確認してください。 詳細: ${error.message}`);
     }
-    throw error; // 元のエラーを再スロー
+    throw error;
   }
 }
 
@@ -779,7 +816,7 @@ function searchAccounts(token) {
     
     if (responseCode === 200 && responseData.success && responseData.errorCode === 0 && responseData.accounts) {
       Logger.log(`アカウント検索成功: ${responseData.accounts.length}件のアカウントが見つかりました。`);
-      return responseData.accounts;
+      return responseData.accounts; // アカウントID、アカウント名、残高などを含む配列が返る想定
     } else {
       const errorMessage = `アカウント検索エラー (${responseCode}): ${responseData.errorMessage || responseBody || '不明なエラー'}`;
       Logger.log(errorMessage);
@@ -826,7 +863,7 @@ function searchTrades(token, accountId, startTimestamp, endTimestamp) {
     const response = UrlFetchApp.fetch(url, options);
     const responseCode = response.getResponseCode();
     const responseBody = response.getContentText();
-    Logger.log(`取引検索レスポンス (${responseCode}) (AccountID: ${accountId}): ${responseBody.substring(0,500)}...`); // レスポンスが長い場合があるので一部表示
+    Logger.log(`取引検索レスポンス (${responseCode}) (AccountID: ${accountId}): ${responseBody.substring(0,500)}...`);
 
     const responseData = JSON.parse(responseBody);
     
@@ -854,22 +891,13 @@ function searchTrades(token, accountId, startTimestamp, endTimestamp) {
  * @return {{startTimestamp: string, endTimestamp: string}} 開始・終了タイムスタンプ (ISO 8601形式 UTC) を含むオブジェクト
  */
 function getDateTimestamps(dateString) {
-  // 日付の妥当性チェック
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
     throw new Error('無効な日付形式です。YYYY-MM-DD形式で指定してください。');
   }
   
-  // 指定された日付文字列をJavaScriptのDateオブジェクトとしてパースする際、
-  // タイムゾーンを指定しないと実行環境のタイムゾーンで解釈されるため、
-  // 明示的にUTCとして扱うか、あるいは CONFIG.TIMEZONE を考慮する。
-  // APIがUTCの0時と23時59分59秒を期待していると仮定する。
-  
-  // 開始タイムスタンプ（その日の0時0分0秒 UTC）
   const startDate = new Date(dateString + 'T00:00:00.000Z');
   const startTimestamp = startDate.toISOString();
   
-  // 終了タイムスタンプ（その日の23時59分59秒999ミリ秒 UTC）
-  // APIの仕様によっては、翌日の0時0分0秒 UTCの直前まで、またはそれを含む/含まないなど詳細な指定が必要な場合がある。
   const endDate = new Date(dateString + 'T23:59:59.999Z');
   const endTimestamp = endDate.toISOString();
   
