@@ -1314,6 +1314,204 @@ class TopstepXClient:
             print(f"ファイル保存中にエラーが発生しました: {str(e)}")
             return False
 
+    def modify_order(self,
+                    account_id: int,
+                    order_id: int,
+                    size: Optional[int] = None,
+                    limit_price: Optional[float] = None,
+                    stop_price: Optional[float] = None,
+                    trail_price: Optional[float] = None,
+                    verbose: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        オープンオーダー（未約定の注文）を修正する
+
+        Args:
+            account_id (int): 対象のアカウントID
+            order_id (int): 修正する注文ID
+            size (Optional[int], optional): 新しい注文数量。Noneの場合は変更しない
+            limit_price (Optional[float], optional): 新しい指値価格。Noneの場合は変更しない
+            stop_price (Optional[float], optional): 新しい逆指値価格。Noneの場合は変更しない
+            trail_price (Optional[float], optional): 新しいトレイリング値幅。Noneの場合は変更しない
+            verbose (bool, optional): 詳細なログメッセージを表示するかどうか。デフォルトはTrue
+
+        Returns:
+            Optional[Dict[str, Any]]: APIレスポンス。失敗した場合はNone
+        """
+        # 認証が済んでいない場合は認証を行う
+        if not self.check_auth():
+            if verbose:
+                print("認証されていません。先に認証を行ってください。")
+            return None
+        
+        modify_url = f"{self.api_url}/api/Order/modify"
+        
+        # 必須パラメータ
+        payload = {
+            "accountId": account_id,
+            "orderId": order_id
+        }
+        
+        # オプションパラメータ（指定された場合のみ追加）
+        if size is not None:
+            payload["size"] = size
+        
+        # 以下は常に含める必要があるパラメータ（APIの仕様に従う）
+        payload["limitPrice"] = limit_price
+        payload["stopPrice"] = stop_price
+        payload["trailPrice"] = trail_price
+        
+        try:
+            if verbose:
+                print(f"注文修正リクエスト送信先: {modify_url}")
+                print(f"アカウントID: {account_id}")
+                print(f"注文ID: {order_id}")
+                
+                if size is not None:
+                    print(f"新しい数量: {size}")
+                if limit_price is not None:
+                    print(f"新しい指値価格: {limit_price}")
+                if stop_price is not None:
+                    print(f"新しい逆指値価格: {stop_price}")
+                if trail_price is not None:
+                    print(f"新しいトレイリング値幅: {trail_price}")
+            
+            response = requests.post(
+                modify_url,
+                headers=self.headers,
+                data=json.dumps(payload),
+                timeout=30
+            )
+            
+            if response.ok:
+                data = response.json()
+                
+                if data.get("success") and data.get("errorCode") == 0:
+                    if verbose:
+                        print(f"注文ID {order_id} の修正に成功しました！")
+                    return data
+                else:
+                    if verbose:
+                        print(f"注文修正エラー: {data.get('errorMessage')}")
+                        print(f"エラーコード: {data.get('errorCode')}")
+            else:
+                if verbose:
+                    print(f"注文修正リクエストエラー: {response.status_code} {response.reason}")
+                    if response.text:
+                        print(f"エラー詳細: {response.text}")
+            
+            return None
+        
+        except Exception as e:
+            if verbose:
+                print(f"注文修正中にエラーが発生しました: {str(e)}")
+            return None
+
+    def modify_open_order_by_index(self, account_id: int, index: int = 0) -> Optional[Dict[str, Any]]:
+        """
+        指定されたアカウントのオープンオーダーを取得し、インデックスで指定された注文を修正する
+        
+        Args:
+            account_id (int): 対象のアカウントID
+            index (int, optional): 修正するオープンオーダーのインデックス（0から始まる）。デフォルトは0（最新の注文）。
+            
+        Returns:
+            Optional[Dict[str, Any]]: 修正操作のAPIレスポンス。失敗した場合はNone。
+        """
+        # オープンオーダーを取得
+        open_orders = self.get_open_orders(account_id, verbose=False)
+        
+        if not open_orders:
+            print(f"アカウントID {account_id} にオープンオーダーはありません。")
+            return None
+        
+        if index < 0 or index >= len(open_orders):
+            print(f"無効なインデックスです。0から{len(open_orders)-1}までの数値を指定してください。")
+            return None
+        
+        target_order = open_orders[index]
+        order_id = target_order.get("id")
+        
+        if not order_id:
+            print("注文IDが見つかりませんでした。")
+            return None
+        
+        # 注文情報を表示
+        print(f"\n以下の注文を修正します:")
+        print(f"  注文ID: {order_id}")
+        print(f"  契約ID: {target_order.get('contractId')}")
+        print(f"  種類: {self.get_order_type_name(target_order.get('type'))}")
+        print(f"  方向: {self.get_order_side_name(target_order.get('side'))}")
+        print(f"  現在のサイズ: {target_order.get('size')}")
+        
+        current_limit_price = target_order.get('limitPrice')
+        current_stop_price = target_order.get('stopPrice')
+        current_trail_price = target_order.get('trailPrice')
+        
+        if current_limit_price is not None:
+            print(f"  現在の指値価格: {current_limit_price}")
+        if current_stop_price is not None:
+            print(f"  現在の逆指値価格: {current_stop_price}")
+        if current_trail_price is not None:
+            print(f"  現在のトレイリング値幅: {current_trail_price}")
+        
+        # 修正値の入力
+        print("\n修正する値を入力してください（変更しない場合は空欄）:")
+        
+        # サイズの修正
+        size_input = input(f"新しいサイズ （現在: {target_order.get('size')}）: ")
+        new_size = int(size_input) if size_input.strip() else None
+        
+        # 価格の修正
+        new_limit_price = None
+        new_stop_price = None
+        new_trail_price = None
+        
+        # 注文タイプに応じて適切な価格入力フィールドを表示
+        order_type = target_order.get('type')
+        
+        if order_type == self.ORDER_TYPE_LIMIT:
+            limit_input = input(f"新しい指値価格 （現在: {current_limit_price}）: ")
+            new_limit_price = float(limit_input) if limit_input.strip() else current_limit_price
+        
+        elif order_type == self.ORDER_TYPE_STOP:
+            stop_input = input(f"新しい逆指値価格 （現在: {current_stop_price}）: ")
+            new_stop_price = float(stop_input) if stop_input.strip() else current_stop_price
+        
+        elif order_type == self.ORDER_TYPE_TRAILING_STOP:
+            trail_input = input(f"新しいトレイリング値幅 （現在: {current_trail_price}）: ")
+            new_trail_price = float(trail_input) if trail_input.strip() else current_trail_price
+        
+        # 確認
+        print("\n===== 修正内容の確認 =====")
+        print(f"  注文ID: {order_id}")
+        
+        if new_size is not None:
+            print(f"  サイズ: {target_order.get('size')} → {new_size}")
+        
+        if new_limit_price is not None and new_limit_price != current_limit_price:
+            print(f"  指値価格: {current_limit_price} → {new_limit_price}")
+        
+        if new_stop_price is not None and new_stop_price != current_stop_price:
+            print(f"  逆指値価格: {current_stop_price} → {new_stop_price}")
+        
+        if new_trail_price is not None and new_trail_price != current_trail_price:
+            print(f"  トレイリング値幅: {current_trail_price} → {new_trail_price}")
+        
+        confirm = input("\nこの内容で注文を修正しますか？(y/n): ").lower()
+        if confirm != 'y':
+            print("修正を中止しました。")
+            return None
+        
+        # 注文を修正
+        return self.modify_order(
+            account_id=account_id,
+            order_id=order_id,
+            size=new_size,
+            limit_price=new_limit_price,
+            stop_price=new_stop_price,
+            trail_price=new_trail_price
+        )
+
     @staticmethod
     def get_time_unit_name(unit: int) -> str:
         """
@@ -1513,9 +1711,10 @@ def main():
         print("7. 注文発注")
         print("8. オープンオーダー検索")
         print("9. 注文キャンセル")
+        print("10. 注文修正")
         print("0. 終了")
         
-        choice = input("選択（0-9）: ")
+        choice = input("選択（0-10）: ")
         
         if choice == "0":
             print("プログラムを終了します。")
@@ -2106,6 +2305,66 @@ def main():
                 
             except Exception as e:
                 print(f"注文キャンセル処理中にエラーが発生しました: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
+        elif choice == "10":
+            print("\n---- 注文修正処理を開始します ----")
+            try:
+                # アカウント選択
+                print("まず、注文を修正するアカウントを選択してください。")
+                selected_account = client.select_account(only_active=True)
+                
+                if not selected_account:
+                    print("アカウントが選択されませんでした。処理を中止します。")
+                    continue
+                
+                account_id = selected_account.get("id")
+                
+                # オープンオーダー取得
+                print(f"\nアカウントID {account_id} のオープンオーダーを検索します...")
+                open_orders = client.get_open_orders(account_id=account_id)
+                
+                if not open_orders:
+                    print(f"アカウントID {account_id} にオープンオーダーはありません。")
+                    continue
+                
+                print("\n===== 修正可能なオープンオーダー =====")
+                client.display_orders(open_orders)
+                
+                # 修正する注文の選択
+                while True:
+                    try:
+                        order_idx_str = input("\n修正する注文の番号を選択してください (1から始まる番号), または 'q' で中止: ")
+                        
+                        if order_idx_str.lower() == 'q':
+                            print("修正処理を中止しました。")
+                            break
+                        
+                        order_idx = int(order_idx_str) - 1  # 表示は1から始まるが、インデックスは0から始まる
+                        
+                        if 0 <= order_idx < len(open_orders):
+                            # 選択された注文の修正処理
+                            result = client.modify_open_order_by_index(account_id, order_idx)
+                            
+                            if result and result.get("success"):
+                                # 修正後の最新のオープンオーダーを表示
+                                updated_orders = client.get_open_orders(account_id, verbose=False)
+                                print("\n===== 修正後のオープンオーダー =====")
+                                client.display_orders(updated_orders)
+                            
+                            break
+                        else:
+                            print(f"無効な選択です。1から{len(open_orders)}までの数字を入力してください。")
+                    
+                    except ValueError:
+                        print("数字を入力するか、'q'で中止してください。")
+                    except Exception as e:
+                        print(f"注文選択中にエラーが発生しました: {str(e)}")
+                        break
+                
+            except Exception as e:
+                print(f"注文修正処理中にエラーが発生しました: {str(e)}")
                 import traceback
                 traceback.print_exc()
         
