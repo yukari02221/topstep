@@ -1650,6 +1650,209 @@ class TopstepXClient:
         if len(positions) > limit:
             print(f"\n... 他 {len(positions) - limit} 件のポジションデータがあります")
 
+    def close_position(self,
+                    account_id: int,
+                    contract_id: str,
+                    verbose: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        指定されたアカウントと契約IDのポジションを完全にクローズする
+
+        Args:
+            account_id (int): 対象のアカウントID
+            contract_id (str): クローズする契約ID
+            verbose (bool, optional): 詳細なログメッセージを表示するかどうか。デフォルトはTrue。
+
+        Returns:
+            Optional[Dict[str, Any]]: APIレスポンス。失敗した場合はNone。
+        """
+        # 認証が済んでいない場合は認証を行う
+        if not self.check_auth():
+            if verbose:
+                print("認証されていません。先に認証を行ってください。")
+            return None
+        
+        close_url = f"{self.api_url}/api/Position/closeContract"
+        
+        payload = {
+            "accountId": account_id,
+            "contractId": contract_id
+        }
+        
+        try:
+            if verbose:
+                print(f"ポジションクローズリクエスト送信先: {close_url}")
+                print(f"アカウントID: {account_id}")
+                print(f"契約ID: {contract_id}")
+            
+            response = requests.post(
+                close_url,
+                headers=self.headers,
+                data=json.dumps(payload),
+                timeout=30
+            )
+            
+            if response.ok:
+                data = response.json()
+                
+                if data.get("success") and data.get("errorCode") == 0:
+                    if verbose:
+                        print(f"契約ID {contract_id} のポジションが正常にクローズされました！")
+                    return data
+                else:
+                    if verbose:
+                        print(f"ポジションクローズエラー: {data.get('errorMessage')}")
+                        print(f"エラーコード: {data.get('errorCode')}")
+            else:
+                if verbose:
+                    print(f"ポジションクローズリクエストエラー: {response.status_code} {response.reason}")
+                    if response.text:
+                        print(f"エラー詳細: {response.text}")
+            
+            return None
+        
+        except Exception as e:
+            if verbose:
+                print(f"ポジションクローズ中にエラーが発生しました: {str(e)}")
+            return None
+
+    def partial_close_position(self,
+                            account_id: int,
+                            contract_id: str,
+                            size: int,
+                            verbose: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        指定されたアカウントと契約IDのポジションを部分的にクローズする
+
+        Args:
+            account_id (int): 対象のアカウントID
+            contract_id (str): クローズする契約ID
+            size (int): クローズする数量
+            verbose (bool, optional): 詳細なログメッセージを表示するかどうか。デフォルトはTrue。
+
+        Returns:
+            Optional[Dict[str, Any]]: APIレスポンス。失敗した場合はNone。
+        """
+        # 認証が済んでいない場合は認証を行う
+        if not self.check_auth():
+            if verbose:
+                print("認証されていません。先に認証を行ってください。")
+            return None
+        
+        close_url = f"{self.api_url}/api/Position/partialCloseContract"
+        
+        payload = {
+            "accountId": account_id,
+            "contractId": contract_id,
+            "size": size
+        }
+        
+        try:
+            if verbose:
+                print(f"ポジション部分クローズリクエスト送信先: {close_url}")
+                print(f"アカウントID: {account_id}")
+                print(f"契約ID: {contract_id}")
+                print(f"クローズする数量: {size}")
+            
+            response = requests.post(
+                close_url,
+                headers=self.headers,
+                data=json.dumps(payload),
+                timeout=30
+            )
+            
+            if response.ok:
+                data = response.json()
+                
+                if data.get("success") and data.get("errorCode") == 0:
+                    if verbose:
+                        print(f"契約ID {contract_id} のポジションが {size} 単位分クローズされました！")
+                    return data
+                else:
+                    if verbose:
+                        print(f"ポジション部分クローズエラー: {data.get('errorMessage')}")
+                        print(f"エラーコード: {data.get('errorCode')}")
+            else:
+                if verbose:
+                    print(f"ポジション部分クローズリクエストエラー: {response.status_code} {response.reason}")
+                    if response.text:
+                        print(f"エラー詳細: {response.text}")
+            
+            return None
+        
+        except Exception as e:
+            if verbose:
+                print(f"ポジション部分クローズ中にエラーが発生しました: {str(e)}")
+            return None
+
+    def close_position_by_index(self, account_id: int, index: int = 0, partial: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        指定されたアカウントのオープンポジションを取得し、インデックスで指定されたポジションをクローズする
+        
+        Args:
+            account_id (int): 対象のアカウントID
+            index (int, optional): クローズするオープンポジションのインデックス（0から始まる）。デフォルトは0（最初のポジション）。
+            partial (bool, optional): 部分的にクローズするかどうか。デフォルトはFalse（完全にクローズ）。
+            
+        Returns:
+            Optional[Dict[str, Any]]: クローズ操作のAPIレスポンス。失敗した場合はNone。
+        """
+        # オープンポジションを取得
+        open_positions = self.get_open_positions(account_id, verbose=False)
+        
+        if not open_positions:
+            print(f"アカウントID {account_id} にオープンポジションはありません。")
+            return None
+        
+        if index < 0 or index >= len(open_positions):
+            print(f"無効なインデックスです。0から{len(open_positions)-1}までの数値を指定してください。")
+            return None
+        
+        target_position = open_positions[index]
+        contract_id = target_position.get("contractId")
+        position_size = target_position.get("size", 0)
+        
+        if not contract_id:
+            print("契約IDが見つかりませんでした。")
+            return None
+        
+        # ポジション情報を表示
+        print(f"\n以下のポジションをクローズします:")
+        print(f"  契約ID: {contract_id}")
+        print(f"  タイプ: {self.get_position_type_name(target_position.get('type'))}")
+        print(f"  サイズ: {position_size}")
+        print(f"  平均価格: {target_position.get('averagePrice', 0)}")
+        
+        if partial:
+            # 部分クローズの場合、サイズを入力
+            while True:
+                size_input = input(f"クローズするサイズを入力してください (1-{position_size}): ")
+                try:
+                    close_size = int(size_input)
+                    if 1 <= close_size <= position_size:
+                        break
+                    else:
+                        print(f"有効なサイズを入力してください（1から{position_size}まで）。")
+                except ValueError:
+                    print("数値を入力してください。")
+            
+            # 確認
+            confirm = input(f"このポジションを {close_size} 単位分クローズしますか？(y/n): ").lower()
+            if confirm != 'y':
+                print("クローズを中止しました。")
+                return None
+            
+            # ポジションを部分的にクローズ
+            return self.partial_close_position(account_id, contract_id, close_size)
+        else:
+            # 完全クローズの確認
+            confirm = input("このポジションを完全にクローズしますか？(y/n): ").lower()
+            if confirm != 'y':
+                print("クローズを中止しました。")
+                return None
+            
+            # ポジションを完全にクローズ
+            return self.close_position(account_id, contract_id)
+
     @staticmethod
     def get_time_unit_name(unit: int) -> str:
         """
@@ -1851,9 +2054,10 @@ def main():
         print("9. 注文キャンセル")
         print("10. 注文修正")
         print("11. オープンポジション検索")
+        print("12. ポジションクローズ")
         print("0. 終了")
         
-        choice = input("選択（0-11）: ")
+        choice = input("選択（0-12）: ")
         
         if choice == "0":
             print("プログラムを終了します。")
@@ -2535,7 +2739,73 @@ def main():
                 print(f"オープンポジション検索処理中にエラーが発生しました: {str(e)}")
                 import traceback
                 traceback.print_exc()
-        
+                
+        elif choice == "12":
+            print("\n---- ポジションクローズ処理を開始します ----")
+            try:
+                # アカウント選択
+                print("まず、ポジションをクローズするアカウントを選択してください。")
+                selected_account = client.select_account(only_active=True)
+                
+                if not selected_account:
+                    print("アカウントが選択されませんでした。処理を中止します。")
+                    continue
+                
+                account_id = selected_account.get("id")
+                
+                # オープンポジション取得
+                print(f"\nアカウントID {account_id} のオープンポジションを検索します...")
+                open_positions = client.get_open_positions(account_id=account_id)
+                
+                if not open_positions:
+                    print(f"アカウントID {account_id} にオープンポジションはありません。")
+                    continue
+                
+                print("\n===== クローズ可能なオープンポジション =====")
+                client.display_positions(open_positions)
+                
+                # クローズするポジションの選択
+                while True:
+                    try:
+                        position_idx_str = input("\nクローズするポジションの番号を選択してください (1から始まる番号), または 'q' で中止: ")
+                        
+                        if position_idx_str.lower() == 'q':
+                            print("クローズ処理を中止しました。")
+                            break
+                        
+                        position_idx = int(position_idx_str) - 1  # 表示は1から始まるが、インデックスは0から始まる
+                        
+                        if 0 <= position_idx < len(open_positions):
+                            # クローズ方法の選択
+                            close_method = input("\nクローズ方法を選択してください (1: 完全クローズ, 2: 部分クローズ): ")
+                            partial = close_method == "2"
+                            
+                            # 選択されたポジションのクローズ処理
+                            result = client.close_position_by_index(account_id, position_idx, partial)
+                            
+                            if result and result.get("success"):
+                                # クローズ後の最新のオープンポジションを表示
+                                updated_positions = client.get_open_positions(account_id, verbose=False)
+                                print("\n===== クローズ後のオープンポジション =====")
+                                if updated_positions:
+                                    client.display_positions(updated_positions)
+                                else:
+                                    print("クローズ後のオープンポジションはありません。")
+                            
+                            break
+                        else:
+                            print(f"無効な選択です。1から{len(open_positions)}までの数字を入力してください。")
+                    
+                    except ValueError:
+                        print("数字を入力するか、'q'で中止してください。")
+                    except Exception as e:
+                        print(f"ポジション選択中にエラーが発生しました: {str(e)}")
+                        break
+                
+            except Exception as e:
+                print(f"ポジションクローズ処理中にエラーが発生しました: {str(e)}")
+                import traceback
+                traceback.print_exc()        
         else:
             print("無効な選択です。0-7の数字を入力してください。")
 
