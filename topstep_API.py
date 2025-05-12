@@ -72,6 +72,18 @@ class TopstepXClient:
     UNIT_WEEK = 5
     UNIT_MONTH = 6
     
+    # 注文タイプの定義
+    ORDER_TYPE_LIMIT = 1
+    ORDER_TYPE_MARKET = 2 
+    ORDER_TYPE_STOP = 4
+    ORDER_TYPE_TRAILING_STOP = 5
+    ORDER_TYPE_JOIN_BID = 6
+    ORDER_TYPE_JOIN_ASK = 7
+
+    # 注文方向の定義
+    ORDER_SIDE_BUY = 0
+    ORDER_SIDE_SELL = 1
+    
     # APIエンドポイント
     DEFAULT_API_URL = "https://api.topstepx.com"
     DEMO_API_URL = "https://gateway-api-demo.s2f.projectx.com"
@@ -866,6 +878,126 @@ class TopstepXClient:
         except Exception as e:
             print(f"ファイル読み込み中にエラーが発生しました: {str(e)}")
             return False
+
+    def place_order(self,
+                    account_id: int,
+                    contract_id: str,
+                    order_type: int,
+                    side: int,
+                    size: int,
+                    limit_price: Optional[float] = None,
+                    stop_price: Optional[float] = None,
+                    trail_price: Optional[float] = None,
+                    custom_tag: Optional[str] = None,
+                    linked_order_id: Optional[int] = None,
+                    verbose: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        注文を発注する
+        
+        Args:
+            account_id (int): 注文を発注するアカウントID
+            contract_id (str): 注文対象の契約ID
+            order_type (int): 注文タイプ - 1=指値(Limit), 2=成行(Market), 4=逆指値(Stop), 
+                            5=トレイリングストップ(TrailingStop), 6=買い気配値(JoinBid), 7=売り気配値(JoinAsk)
+            side (int): 注文の方向 - 0=買い(Bid/Buy), 1=売り(Ask/Sell)
+            size (int): 注文数量
+            limit_price (float, optional): 指値注文の価格（該当する場合）
+            stop_price (float, optional): 逆指値注文の価格（該当する場合）
+            trail_price (float, optional): トレイリングストップの値幅（該当する場合）
+            custom_tag (str, optional): 注文に付けるカスタムタグ
+            linked_order_id (int, optional): 関連付ける注文ID
+            verbose (bool, optional): 詳細なログメッセージを表示するかどうか。デフォルトはTrue
+            
+        Returns:
+            Optional[Dict[str, Any]]: 注文結果を含むAPIレスポンス。失敗した場合はNone
+        """
+        # 認証が済んでいない場合は認証を行う
+        if not self.check_auth():
+            if verbose:
+                print("認証されていません。先に認証を行ってください。")
+            return None
+
+        order_url = f"{self.api_url}/api/Order/place"
+        
+        # 注文タイプの名称マッピング（ログ表示用）
+        order_type_names = {
+            1: "指値(Limit)",
+            2: "成行(Market)",
+            4: "逆指値(Stop)",
+            5: "トレイリングストップ(TrailingStop)",
+            6: "買い気配値(JoinBid)",
+            7: "売り気配値(JoinAsk)"
+        }
+        
+        # 注文方向の名称マッピング（ログ表示用）
+        side_names = {
+            0: "買い(Bid/Buy)",
+            1: "売り(Ask/Sell)"
+        }
+        
+        payload = {
+            "accountId": account_id,
+            "contractId": contract_id,
+            "type": order_type,
+            "side": side,
+            "size": size,
+            "limitPrice": limit_price,
+            "stopPrice": stop_price,
+            "trailPrice": trail_price,
+            "customTag": custom_tag,
+            "linkedOrderId": linked_order_id
+        }
+
+        try:
+            if verbose:
+                print(f"注文発注リクエスト送信先: {order_url}")
+                print(f"アカウントID: {account_id}")
+                print(f"契約ID: {contract_id}")
+                print(f"注文タイプ: {order_type_names.get(order_type, order_type)}")
+                print(f"方向: {side_names.get(side, side)}")
+                print(f"数量: {size}")
+                
+                if limit_price is not None:
+                    print(f"指値価格: {limit_price}")
+                if stop_price is not None:
+                    print(f"逆指値価格: {stop_price}")
+                if trail_price is not None:
+                    print(f"トレイリング値幅: {trail_price}")
+                if custom_tag:
+                    print(f"カスタムタグ: {custom_tag}")
+                if linked_order_id:
+                    print(f"関連注文ID: {linked_order_id}")
+            
+            response = requests.post(
+                order_url,
+                headers=self.headers,
+                data=json.dumps(payload),
+                timeout=30
+            )
+            
+            if response.ok:
+                data = response.json()
+                
+                if data.get("success") and data.get("errorCode") == 0:
+                    if verbose:
+                        print(f"注文発注に成功しました！注文ID: {data.get('orderId')}")
+                    return data
+                else:
+                    if verbose:
+                        print(f"注文発注エラー: {data.get('errorMessage')}")
+                        print(f"エラーコード: {data.get('errorCode')}")
+            else:
+                if verbose:
+                    print(f"注文発注リクエストエラー: {response.status_code} {response.reason}")
+                    if response.text:
+                        print(f"エラー詳細: {response.text}")
+            
+            return None
+        
+        except Exception as e:
+            if verbose:
+                print(f"注文発注中にエラーが発生しました: {str(e)}")
+            return None
     
     def save_result_to_json(self, data: Dict[str, Any], filename: str = "result.json") -> bool:
         """
@@ -1083,9 +1215,10 @@ def main():
         print("4. 契約IDを直接指定して履歴データ取得")
         print("5. アカウント検索後、指定したIDの注文履歴を取得")
         print("6. アカウント検索後、指定したIDのトレード履歴を取得")
+        print("7. 注文発注")
         print("0. 終了")
         
-        choice = input("選択（0-6）: ")
+        choice = input("選択（0-7）: ")
         
         if choice == "0":
             print("プログラムを終了します。")
@@ -1475,9 +1608,115 @@ def main():
                 print(f"トレード履歴検索処理全体で予期せぬエラーが発生しました: {str(e)}")
                 import traceback
                 traceback.print_exc()
+
+        elif choice == "7":
+            print("\n---- 注文発注を開始します ----")
+            try:
+                # アカウント選択
+                print("まず、注文を発注するアカウントを選択してください。")
+                selected_account = client.select_account(only_active=True)
+                
+                if not selected_account:
+                    print("アカウントが選択されませんでした。処理を中止します。")
+                    continue
+                
+                account_id = selected_account.get("id")
+                
+                # 契約検索
+                contract_search = input("契約を検索するテキストを入力（例: ES, NQ, RTY）: ")
+                selected_contract = client.select_contract(contract_search)
+                
+                if not selected_contract:
+                    print("契約が選択されませんでした。処理を中止します。")
+                    continue
+                
+                contract_id = selected_contract.get("id")
+                
+                # 注文方向の選択
+                print("\n注文方向を選択してください:")
+                print("1. 買い (Bid/Buy)")
+                print("2. 売り (Ask/Sell)")
+                side_choice = input("選択 (1-2): ")
+                
+                side = client.ORDER_SIDE_BUY if side_choice == "1" else client.ORDER_SIDE_SELL
+                
+                # 注文タイプの選択
+                print("\n注文タイプを選択してください:")
+                print("1. 成行 (Market)")
+                print("2. 指値 (Limit)")
+                print("3. 逆指値 (Stop)")
+                order_type_choice = input("選択 (1-3): ")
+                
+                if order_type_choice == "1":
+                    order_type = client.ORDER_TYPE_MARKET
+                elif order_type_choice == "2":
+                    order_type = client.ORDER_TYPE_LIMIT
+                else:
+                    order_type = client.ORDER_TYPE_STOP
+                
+                # 数量の入力
+                size_str = input("\n注文数量を入力: ")
+                size = int(size_str)
+                
+                # 価格の入力（必要な場合）
+                limit_price = None
+                stop_price = None
+                
+                if order_type == client.ORDER_TYPE_LIMIT:
+                    limit_price_str = input("指値価格を入力: ")
+                    limit_price = float(limit_price_str)
+                elif order_type == client.ORDER_TYPE_STOP:
+                    stop_price_str = input("逆指値価格を入力: ")
+                    stop_price = float(stop_price_str)
+                
+                # カスタムタグ（オプション）
+                custom_tag = input("\nカスタムタグを入力 (省略可): ") or None
+                
+                # 注文確認
+                print("\n==== 注文内容の確認 ====")
+                print(f"アカウント: ID={account_id}, 名前={selected_account.get('name')}")
+                print(f"契約: ID={contract_id}, 名前={selected_contract.get('name')}, 説明={selected_contract.get('description')}")
+                print(f"方向: {'買い(Buy)' if side == client.ORDER_SIDE_BUY else '売り(Sell)'}")
+                
+                if order_type == client.ORDER_TYPE_MARKET:
+                    print("タイプ: 成行(Market)")
+                elif order_type == client.ORDER_TYPE_LIMIT:
+                    print(f"タイプ: 指値(Limit), 価格: {limit_price}")
+                elif order_type == client.ORDER_TYPE_STOP:
+                    print(f"タイプ: 逆指値(Stop), 価格: {stop_price}")
+                
+                print(f"数量: {size}")
+                
+                if custom_tag:
+                    print(f"カスタムタグ: {custom_tag}")
+                
+                confirm = input("\nこの内容で注文を発注しますか？(y/n): ").lower()
+                
+                if confirm == 'y':
+                    # 注文発注
+                    result = client.place_order(
+                        account_id=account_id,
+                        contract_id=contract_id,
+                        order_type=order_type,
+                        side=side,
+                        size=size,
+                        limit_price=limit_price,
+                        stop_price=stop_price,
+                        custom_tag=custom_tag
+                    )
+                    
+                    if result and result.get("success"):
+                        print(f"\n注文が正常に発注されました！注文ID: {result.get('orderId')}")
+                    else:
+                        print("\n注文の発注に失敗しました。")
+                else:
+                    print("\n注文発注がキャンセルされました。")
+            
+            except Exception as e:
+                print(f"注文発注中にエラーが発生しました: {str(e)}")
         
         else:
-            print("無効な選択です。0-6の数字を入力してください。")
+            print("無効な選択です。0-7の数字を入力してください。")
 
 
 # このファイルが直接実行された場合のみmain()を実行
