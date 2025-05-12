@@ -84,6 +84,9 @@ class TopstepXClient:
     ORDER_SIDE_BUY = 0
     ORDER_SIDE_SELL = 1
     
+    POSITION_TYPE_LONG = 1  # ロングポジション
+    POSITION_TYPE_SHORT = 2  # ショートポジション
+    
     # APIエンドポイント
     DEFAULT_API_URL = "https://api.topstepx.com"
     DEMO_API_URL = "https://gateway-api-demo.s2f.projectx.com"
@@ -1512,6 +1515,141 @@ class TopstepXClient:
             trail_price=new_trail_price
         )
 
+    def search_open_positions(self,
+                            account_id: int,
+                            verbose: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        指定されたアカウントIDのオープンポジション（保有中のポジション）を検索する
+
+        Args:
+            account_id (int): 検索対象のアカウントID
+            verbose (bool, optional): 詳細なログメッセージを表示するかどうか。デフォルトはTrue。
+
+        Returns:
+            Optional[Dict[str, Any]]: オープンポジション情報を含むAPIレスポンス。失敗した場合はNone。
+        """
+        # 認証が済んでいない場合は認証を行う
+        if not self.check_auth():
+            if verbose:
+                print("認証されていません。先に認証を行ってください。")
+            return None
+        
+        search_url = f"{self.api_url}/api/Position/searchOpen"
+        
+        payload = {
+            "accountId": account_id
+        }
+        
+        try:
+            if verbose:
+                print(f"オープンポジション検索リクエスト送信先: {search_url}")
+                print(f"アカウントID: {account_id}")
+            
+            response = requests.post(
+                search_url,
+                headers=self.headers,
+                data=json.dumps(payload),
+                timeout=30
+            )
+            
+            if response.ok:
+                data = response.json()
+                
+                if data.get("success") and data.get("errorCode") == 0:
+                    if verbose:
+                        print(f"オープンポジション検索に成功しました。取得件数: {len(data.get('positions', []))}")
+                    return data
+                else:
+                    if verbose:
+                        print(f"オープンポジション検索APIエラー: {data.get('errorMessage')}")
+                        print(f"エラーコード: {data.get('errorCode')}")
+            else:
+                if verbose:
+                    print(f"オープンポジション検索リクエストエラー: {response.status_code} {response.reason}")
+                    if response.text:
+                        print(f"エラー詳細: {response.text}")
+            
+            return None
+        
+        except Exception as e:
+            if verbose:
+                print(f"オープンポジション検索中にエラーが発生しました: {str(e)}")
+            return None
+
+    def get_open_positions(self,
+                        account_id: int,
+                        verbose: bool = True) -> List[Dict[str, Any]]:
+        """
+        指定されたアカウントIDのオープンポジション（保有中のポジション）リストを取得する（便利メソッド）
+
+        Args:
+            account_id (int): 検索対象のアカウントID
+            verbose (bool, optional): 詳細なログメッセージを表示するかどうか。デフォルトはTrue。
+
+        Returns:
+            List[Dict[str, Any]]: オープンポジション情報のリスト。失敗した場合は空リスト。
+        """
+        result = self.search_open_positions(
+            account_id=account_id,
+            verbose=verbose
+        )
+        if result and "positions" in result:
+            return result["positions"]
+        return []
+
+    def get_position_type_name(self, position_type: int) -> str:
+        """
+        ポジションタイプの数値を名前に変換する
+        
+        Args:
+            position_type (int): ポジションタイプ
+                
+        Returns:
+            str: ポジションタイプの名前
+        """
+        type_map = {
+            1: "ロング(Long)",
+            2: "ショート(Short)"
+        }
+        return type_map.get(position_type, f"不明({position_type})")
+
+    def display_positions(self, positions: List[Dict[str, Any]], limit: int = 10) -> None:
+        """
+        ポジション情報を表示する
+        
+        Args:
+            positions (List[Dict[str, Any]]): ポジション情報のリスト
+            limit (int, optional): 表示する最大ポジション数。デフォルトは10
+        """
+        if not positions:
+            print("ポジションが見つかりませんでした")
+            return
+        
+        print(f"取得したポジション数: {len(positions)}")
+        
+        # 表示するポジション数を制限
+        display_positions = positions[:min(limit, len(positions))]
+        
+        # テーブルヘッダーを表示
+        print("\nID    | 契約ID           | 日時                    | タイプ        | サイズ | 平均価格")
+        print("-" * 90)
+        
+        # ポジションデータを表示
+        for position in display_positions:
+            position_id = position.get("id", "N/A")
+            contract_id = position.get("contractId", "N/A")
+            time_str = position.get("creationTimestamp", "")[:19].replace("T", " ")  # ISO8601形式から日時部分のみを抽出
+            
+            position_type = self.get_position_type_name(position.get("type", -1))
+            size = position.get("size", 0)
+            avg_price = position.get("averagePrice", 0)
+            
+            print(f"{position_id:<8} | {contract_id:<17} | {time_str} | {position_type:<13} | {size:<6} | {avg_price:<9.3f}")
+        
+        # 表示されていないポジションがある場合
+        if len(positions) > limit:
+            print(f"\n... 他 {len(positions) - limit} 件のポジションデータがあります")
+
     @staticmethod
     def get_time_unit_name(unit: int) -> str:
         """
@@ -1712,9 +1850,10 @@ def main():
         print("8. オープンオーダー検索")
         print("9. 注文キャンセル")
         print("10. 注文修正")
+        print("11. オープンポジション検索")
         print("0. 終了")
         
-        choice = input("選択（0-10）: ")
+        choice = input("選択（0-11）: ")
         
         if choice == "0":
             print("プログラムを終了します。")
@@ -2365,6 +2504,35 @@ def main():
                 
             except Exception as e:
                 print(f"注文修正処理中にエラーが発生しました: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
+        elif choice == "11":
+            print("\n---- オープンポジション検索を開始します ----")
+            try:
+                # アカウント選択
+                print("まず、オープンポジションを検索するアカウントを選択してください。")
+                selected_account = client.select_account(only_active=True)
+                
+                if not selected_account:
+                    print("アカウントが選択されませんでした。処理を中止します。")
+                    continue
+                
+                account_id = selected_account.get("id")
+                
+                # オープンポジション取得
+                print(f"\nアカウントID {account_id} のオープンポジションを検索します...")
+                open_positions = client.get_open_positions(account_id=account_id)
+                
+                if open_positions:
+                    print("\n===== オープンポジション検索結果 =====")
+                    client.display_positions(open_positions)
+                    
+                else:
+                    print(f"アカウントID {account_id} にオープンポジションはありません。")
+                    
+            except Exception as e:
+                print(f"オープンポジション検索処理中にエラーが発生しました: {str(e)}")
                 import traceback
                 traceback.print_exc()
         
