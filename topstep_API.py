@@ -1146,6 +1146,153 @@ class TopstepXClient:
         # 表示されていない注文がある場合
         if len(orders) > limit:
             print(f"\n... 他 {len(orders) - limit} 件の注文データがあります")
+
+    def cancel_order(self,
+                    account_id: int,
+                    order_id: int,
+                    verbose: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        指定された注文をキャンセルする
+
+        Args:
+            account_id (int): 対象のアカウントID
+            order_id (int): キャンセルする注文ID
+            verbose (bool, optional): 詳細なログメッセージを表示するかどうか。デフォルトはTrue。
+
+        Returns:
+            Optional[Dict[str, Any]]: APIレスポンス。失敗した場合はNone。
+        """
+        # 認証が済んでいない場合は認証を行う
+        if not self.check_auth():
+            if verbose:
+                print("認証されていません。先に認証を行ってください。")
+            return None
+        
+        cancel_url = f"{self.api_url}/api/Order/cancel"
+        
+        payload = {
+            "accountId": account_id,
+            "orderId": order_id
+        }
+        
+        try:
+            if verbose:
+                print(f"注文キャンセルリクエスト送信先: {cancel_url}")
+                print(f"アカウントID: {account_id}")
+                print(f"注文ID: {order_id}")
+            
+            response = requests.post(
+                cancel_url,
+                headers=self.headers,
+                data=json.dumps(payload),
+                timeout=30
+            )
+            
+            if response.ok:
+                data = response.json()
+                
+                if data.get("success") and data.get("errorCode") == 0:
+                    if verbose:
+                        print(f"注文ID {order_id} のキャンセルに成功しました！")
+                    return data
+                else:
+                    if verbose:
+                        print(f"注文キャンセルエラー: {data.get('errorMessage')}")
+                        print(f"エラーコード: {data.get('errorCode')}")
+            else:
+                if verbose:
+                    print(f"注文キャンセルリクエストエラー: {response.status_code} {response.reason}")
+                    if response.text:
+                        print(f"エラー詳細: {response.text}")
+            
+            return None
+        
+        except Exception as e:
+            if verbose:
+                print(f"注文キャンセル中にエラーが発生しました: {str(e)}")
+            return None
+
+    def cancel_open_order_by_index(self, account_id: int, index: int = 0) -> Optional[Dict[str, Any]]:
+        """
+        指定されたアカウントのオープンオーダーを取得し、インデックスで指定された注文をキャンセルする
+        
+        Args:
+            account_id (int): 対象のアカウントID
+            index (int, optional): キャンセルするオープンオーダーのインデックス（0から始まる）。デフォルトは0（最新の注文）。
+            
+        Returns:
+            Optional[Dict[str, Any]]: キャンセル操作のAPIレスポンス。失敗した場合はNone。
+        """
+        # オープンオーダーを取得
+        open_orders = self.get_open_orders(account_id, verbose=False)
+        
+        if not open_orders:
+            print(f"アカウントID {account_id} にオープンオーダーはありません。")
+            return None
+        
+        if index < 0 or index >= len(open_orders):
+            print(f"無効なインデックスです。0から{len(open_orders)-1}までの数値を指定してください。")
+            return None
+        
+        target_order = open_orders[index]
+        order_id = target_order.get("id")
+        
+        if not order_id:
+            print("注文IDが見つかりませんでした。")
+            return None
+        
+        # 注文情報を表示
+        print(f"\n以下の注文をキャンセルします:")
+        print(f"  注文ID: {order_id}")
+        print(f"  契約ID: {target_order.get('contractId')}")
+        print(f"  種類: {self.get_order_type_name(target_order.get('type'))}")
+        print(f"  方向: {self.get_order_side_name(target_order.get('side'))}")
+        print(f"  サイズ: {target_order.get('size')}")
+        
+        # 確認
+        confirm = input("この注文をキャンセルしますか？(y/n): ").lower()
+        if confirm != 'y':
+            print("キャンセルを中止しました。")
+            return None
+        
+        # 注文をキャンセル
+        return self.cancel_order(account_id, order_id)
+
+    def get_order_type_name(self, order_type: int) -> str:
+        """
+        注文タイプの数値を名前に変換する
+        
+        Args:
+            order_type (int): 注文タイプ
+                
+        Returns:
+            str: 注文タイプの名前
+        """
+        type_map = {
+            1: "指値(Limit)",
+            2: "成行(Market)",
+            4: "逆指値(Stop)",
+            5: "トレイリングストップ(TrailingStop)",
+            6: "買い気配値(JoinBid)",
+            7: "売り気配値(JoinAsk)"
+        }
+        return type_map.get(order_type, f"不明({order_type})")
+
+    def get_order_side_name(self, side: int) -> str:
+        """
+        注文方向の数値を名前に変換する
+        
+        Args:
+            side (int): 注文方向
+                
+        Returns:
+            str: 注文方向の名前
+        """
+        side_map = {
+            0: "買い(Bid/Buy)",
+            1: "売り(Ask/Sell)"
+        }
+        return side_map.get(side, f"不明({side})")
     
     def save_result_to_json(self, data: Dict[str, Any], filename: str = "result.json") -> bool:
         """
@@ -1365,9 +1512,10 @@ def main():
         print("6. アカウント検索後、指定したIDのトレード履歴を取得")
         print("7. 注文発注")
         print("8. オープンオーダー検索")
+        print("9. 注文キャンセル")
         print("0. 終了")
         
-        choice = input("選択（0-8）: ")
+        choice = input("選択（0-9）: ")
         
         if choice == "0":
             print("プログラムを終了します。")
@@ -1889,6 +2037,75 @@ def main():
                     
             except Exception as e:
                 print(f"オープンオーダー検索処理中にエラーが発生しました: {str(e)}")
+                import traceback
+                traceback.print_exc()
+
+        elif choice == "9":
+            print("\n---- 注文キャンセル処理を開始します ----")
+            try:
+                # アカウント選択
+                print("まず、注文をキャンセルするアカウントを選択してください。")
+                selected_account = client.select_account(only_active=True)
+                
+                if not selected_account:
+                    print("アカウントが選択されませんでした。処理を中止します。")
+                    continue
+                
+                account_id = selected_account.get("id")
+                
+                # オープンオーダー取得
+                print(f"\nアカウントID {account_id} のオープンオーダーを検索します...")
+                open_orders = client.get_open_orders(account_id=account_id)
+                
+                if not open_orders:
+                    print(f"アカウントID {account_id} にオープンオーダーはありません。")
+                    continue
+                
+                print("\n===== キャンセル可能なオープンオーダー =====")
+                client.display_orders(open_orders)
+                
+                # キャンセルする注文の選択
+                while True:
+                    try:
+                        order_idx_str = input("\nキャンセルする注文の番号を選択してください (1から始まる番号), または 'q' で中止: ")
+                        
+                        if order_idx_str.lower() == 'q':
+                            print("キャンセル処理を中止しました。")
+                            break
+                        
+                        order_idx = int(order_idx_str) - 1  # 表示は1から始まるが、インデックスは0から始まる
+                        
+                        if 0 <= order_idx < len(open_orders):
+                            target_order = open_orders[order_idx]
+                            order_id = target_order.get("id")
+                            
+                            # 注文情報を表示
+                            print(f"\n以下の注文をキャンセルします:")
+                            print(f"  注文ID: {order_id}")
+                            print(f"  契約ID: {target_order.get('contractId')}")
+                            print(f"  種類: {client.get_order_type_name(target_order.get('type'))}")
+                            print(f"  方向: {client.get_order_side_name(target_order.get('side'))}")
+                            print(f"  サイズ: {target_order.get('size')}")
+                            
+                            # 確認
+                            confirm = input("この注文をキャンセルしますか？(y/n): ").lower()
+                            if confirm == 'y':
+                                result = client.cancel_order(account_id, order_id)
+                            else:
+                                print("キャンセルを中止しました。")
+                            
+                            break
+                        else:
+                            print(f"無効な選択です。1から{len(open_orders)}までの数字を入力してください。")
+                    
+                    except ValueError:
+                        print("数字を入力するか、'q'で中止してください。")
+                    except Exception as e:
+                        print(f"注文選択中にエラーが発生しました: {str(e)}")
+                        break
+                
+            except Exception as e:
+                print(f"注文キャンセル処理中にエラーが発生しました: {str(e)}")
                 import traceback
                 traceback.print_exc()
         
