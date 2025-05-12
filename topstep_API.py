@@ -998,6 +998,154 @@ class TopstepXClient:
             if verbose:
                 print(f"注文発注中にエラーが発生しました: {str(e)}")
             return None
+
+    def search_open_orders(self,
+                        account_id: int,
+                        verbose: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        指定されたアカウントIDのオープンオーダー（未約定の注文）を検索する
+
+        Args:
+            account_id (int): 検索対象のアカウントID
+            verbose (bool, optional): 詳細なログメッセージを表示するかどうか。デフォルトはTrue。
+
+        Returns:
+            Optional[Dict[str, Any]]: オープンオーダー情報を含むAPIレスポンス。失敗した場合はNone。
+        """
+        if not self.check_auth():
+            if verbose:
+                print("認証されていません。先に認証を行ってください。")
+            return None
+
+        search_url = f"{self.api_url}/api/Order/searchOpen"
+        
+        payload = {
+            "accountId": account_id
+        }
+                
+        try:
+            if verbose:
+                print(f"オープンオーダー検索リクエスト送信先: {search_url}")
+                print(f"アカウントID: {account_id}")
+
+            response = requests.post(
+                search_url,
+                headers=self.headers,
+                data=json.dumps(payload),
+                timeout=30
+            )
+
+            if response.ok:
+                data = response.json()
+                if data.get("success") and data.get("errorCode") == 0:
+                    if verbose:
+                        print(f"オープンオーダー検索に成功しました。取得件数: {len(data.get('orders', []))}")
+                    return data
+                else:
+                    if verbose:
+                        print(f"オープンオーダー検索APIエラー: {data.get('errorMessage')}")
+                        print(f"エラーコード: {data.get('errorCode')}")
+            else:
+                if verbose:
+                    print(f"オープンオーダー検索リクエストエラー: {response.status_code} {response.reason}")
+                    if response.text:
+                        print(f"エラー詳細: {response.text}")
+            
+            return None
+
+        except Exception as e:
+            if verbose:
+                print(f"オープンオーダー検索中にエラーが発生しました: {str(e)}")
+            return None
+
+    def get_open_orders(self,
+                        account_id: int,
+                        verbose: bool = True) -> List[Dict[str, Any]]:
+        """
+        指定されたアカウントIDのオープンオーダー（未約定の注文）リストを取得する（便利メソッド）
+
+        Args:
+            account_id (int): 検索対象のアカウントID
+            verbose (bool, optional): 詳細なログメッセージを表示するかどうか。デフォルトはTrue。
+
+        Returns:
+            List[Dict[str, Any]]: オープンオーダー情報のリスト。失敗した場合は空リスト。
+        """
+        result = self.search_open_orders(
+            account_id=account_id,
+            verbose=verbose
+        )
+        if result and "orders" in result:
+            return result["orders"]
+        return []
+
+    def display_orders(self, orders: List[Dict[str, Any]], limit: int = 10) -> None:
+        """
+        注文情報を表示する
+        
+        Args:
+            orders (List[Dict[str, Any]]): 注文情報のリスト
+            limit (int, optional): 表示する最大注文数。デフォルトは10
+        """
+        if not orders:
+            print("注文が見つかりませんでした")
+            return
+        
+        print(f"取得した注文数: {len(orders)}")
+        
+        # 表示する注文数を制限
+        display_orders = orders[:min(limit, len(orders))]
+        
+        # ステータスの名称マッピング
+        status_map = {
+            0: "不明",
+            1: "オープン",
+            2: "部分約定",
+            3: "約定済",
+            4: "キャンセル",
+            5: "拒否",
+            6: "期限切れ"
+        }
+        
+        # 注文タイプの名称マッピング
+        type_map = {
+            1: "指値(Limit)",
+            2: "成行(Market)",
+            4: "逆指値(Stop)",
+            5: "トレイリングストップ(TrailingStop)",
+            6: "買い気配値(JoinBid)",
+            7: "売り気配値(JoinAsk)"
+        }
+        
+        # サイド（売買）の表示用マッピング
+        side_map = {0: "買", 1: "売"}
+        
+        # テーブルヘッダーを表示
+        print("\nID    | 契約ID           | 日時                    | 状態   | タイプ             | 方向 | サイズ | 指値価格  | 逆指値価格")
+        print("-" * 110)
+        
+        # 注文データを表示
+        for order in display_orders:
+            order_id = order.get("id", "N/A")
+            contract_id = order.get("contractId", "N/A")
+            time_str = order.get("creationTimestamp", "")[:19].replace("T", " ")  # ISO8601形式から日時部分のみを抽出
+            
+            status = status_map.get(order.get("status", 0), "不明")
+            order_type = type_map.get(order.get("type", 0), "不明")
+            side = side_map.get(order.get("side", -1), "不明")
+            size = order.get("size", 0)
+            
+            limit_price = order.get("limitPrice")
+            limit_price_str = f"{limit_price:<9.3f}" if limit_price is not None else "N/A     "
+            
+            stop_price = order.get("stopPrice")
+            stop_price_str = f"{stop_price:<9.3f}" if stop_price is not None else "N/A     "
+            
+            print(f"{order_id:<8} | {contract_id:<17} | {time_str} | {status:<6} | {order_type:<18} | {side}  | {size:<6} | {limit_price_str} | {stop_price_str}")
+        
+        # 表示されていない注文がある場合
+        if len(orders) > limit:
+            print(f"\n... 他 {len(orders) - limit} 件の注文データがあります")
     
     def save_result_to_json(self, data: Dict[str, Any], filename: str = "result.json") -> bool:
         """
@@ -1216,9 +1364,10 @@ def main():
         print("5. アカウント検索後、指定したIDの注文履歴を取得")
         print("6. アカウント検索後、指定したIDのトレード履歴を取得")
         print("7. 注文発注")
+        print("8. オープンオーダー検索")
         print("0. 終了")
         
-        choice = input("選択（0-7）: ")
+        choice = input("選択（0-8）: ")
         
         if choice == "0":
             print("プログラムを終了します。")
@@ -1714,6 +1863,34 @@ def main():
             
             except Exception as e:
                 print(f"注文発注中にエラーが発生しました: {str(e)}")
+
+        elif choice == "8":
+            print("\n---- オープンオーダー検索を開始します ----")
+            try:
+                # アカウント選択
+                print("まず、オープンオーダーを検索するアカウントを選択してください。")
+                selected_account = client.select_account(only_active=True)
+                
+                if not selected_account:
+                    print("アカウントが選択されませんでした。処理を中止します。")
+                    continue
+                
+                account_id = selected_account.get("id")
+                
+                # オープンオーダー取得
+                print(f"\nアカウントID {account_id} のオープンオーダーを検索します...")
+                open_orders = client.get_open_orders(account_id=account_id)
+                
+                if open_orders:
+                    print("\n===== オープンオーダー検索結果 =====")
+                    client.display_orders(open_orders)
+                else:
+                    print(f"アカウントID {account_id} にオープンオーダーはありません。")
+                    
+            except Exception as e:
+                print(f"オープンオーダー検索処理中にエラーが発生しました: {str(e)}")
+                import traceback
+                traceback.print_exc()
         
         else:
             print("無効な選択です。0-7の数字を入力してください。")
